@@ -55,7 +55,7 @@ No internet. No accounts. No cloud. Just open it on both devices and tap.
 
 ## 📦 Install
 
-Both the APK and `FastDrop-mac.zip` come from the **[⬇️ latest Release](https://github.com/himanshudev28/FastDrop/releases/latest)**. You can also [build it yourself](#-build-from-source).
+The APK and the Mac app (`FastDrop-mac.dmg`, or `FastDrop-mac.zip`) come from the **[⬇️ latest Release](https://github.com/himanshudev28/FastDrop/releases/latest)**. You can also [build it yourself](#-build-from-source).
 
 ### 📱 Android phone or TV
 1. Download `FastDrop.apk`, copy it to the phone or TV and open it, or run:
@@ -65,7 +65,7 @@ Both the APK and `FastDrop-mac.zip` come from the **[⬇️ latest Release](http
 2. **On a TV:** put the APK on a USB stick and install it with a file manager, or use `adb` over the network.
 
 ### 🍎 Mac
-1. Download and unzip `FastDrop-mac.zip`, then move `FastDrop.app` to **Applications**.
+1. Download `FastDrop-mac.dmg`, open it, and drag **FastDrop** onto **Applications**. (Prefer a zip? `FastDrop-mac.zip` has the same app.)
 2. The first time, **right‑click → Open** (then **Open** again). The app isn't notarized, so a double‑click is blocked by Gatekeeper.
 3. Allow **Local Network** access when macOS asks.
 

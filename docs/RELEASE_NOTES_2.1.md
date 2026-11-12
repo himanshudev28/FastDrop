@@ -31,7 +31,7 @@ A new look, and a lot more you can do with it: resume, trusted devices, text, mu
 - **Drag files onto the menu-bar icon** to add them to the tray.
 - Full protocol 2 support: resume, trusted devices, confirmation code, text, CRC32 and multi-device send.
 - Universal build (Apple silicon and Intel), with the new Signal app icon.
-- Download `FastDrop-mac.zip` from this release. Unzip, move to Applications, and the first time **right-click → Open**.
+- Download `FastDrop-mac.dmg` from this release, open it and drag FastDrop to Applications (or use `FastDrop-mac.zip`). The first time, **right-click → Open**.
 
 ## Command-line client (Windows / Linux / macOS)
 

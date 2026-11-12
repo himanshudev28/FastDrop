@@ -134,12 +134,20 @@ jobs:
           shasum -a 256 FastDrop-mac.zip > FastDrop-mac.zip.sha256
           cat FastDrop-mac.zip.sha256
 
+      - name: Disk image (drag to Applications) and checksum
+        working-directory: mac
+        run: |
+          scripts/make-dmg.sh build/FastDrop.app build/FastDrop-mac.dmg
+          (cd build && shasum -a 256 FastDrop-mac.dmg > FastDrop-mac.dmg.sha256 && cat FastDrop-mac.dmg.sha256)
+
       - uses: actions/upload-artifact@v4
         with:
           name: FastDrop-mac
           path: |
             mac/build/FastDrop-mac.zip
             mac/build/FastDrop-mac.zip.sha256
+            mac/build/FastDrop-mac.dmg
+            mac/build/FastDrop-mac.dmg.sha256
 
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -148,3 +156,5 @@ jobs:
           files: |
             mac/build/FastDrop-mac.zip
             mac/build/FastDrop-mac.zip.sha256
+            mac/build/FastDrop-mac.dmg
+            mac/build/FastDrop-mac.dmg.sha256

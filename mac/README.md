@@ -43,7 +43,7 @@ On first launch, macOS asks for **Local Network** access. Allow it, or the Mac c
 
 ## Downloaded builds (Gatekeeper)
 
-Release builds (`FastDrop-mac.zip`) are signed ad-hoc and **not notarized**. After unzipping, right-click `FastDrop.app` → **Open** (then *Open* again) the first time. Or run `xattr -dr com.apple.quarantine FastDrop.app`. Verify the download with the `.sha256` file (`shasum -a 256 -c`).
+Release builds (`FastDrop-mac.dmg` / `FastDrop-mac.zip`, made with `scripts/make-dmg.sh` and `ditto`) are signed ad-hoc and **not notarized**. After dragging it to Applications, right-click `FastDrop.app` → **Open** (then *Open* again) the first time. Or run `xattr -dr com.apple.quarantine FastDrop.app`. Verify the download with the `.sha256` file (`shasum -a 256 -c`).
 
 ## Connect a phone
 
