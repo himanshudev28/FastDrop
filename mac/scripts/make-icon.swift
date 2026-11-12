@@ -13,44 +13,34 @@ func render(_ px: Int) -> Data {
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
 
+    // macOS-style rounded square with the standard margin, a soft drop shadow, flat signal orange.
     let inset = s * 0.098
     let body = CGRect(x: inset, y: inset, width: s - inset * 2, height: s - inset * 2)
     let path = NSBezierPath(roundedRect: body, xRadius: body.width * 0.225, yRadius: body.width * 0.225)
-    NSGradient(colors: [NSColor(red: 0x4F / 255, green: 0xA3 / 255, blue: 1, alpha: 1),
-                        NSColor(red: 0x7C / 255, green: 0x6C / 255, blue: 1, alpha: 1)])!
-        .draw(in: path, angle: 45)   // violet top-left to blue bottom-right
-
     NSGraphicsContext.saveGraphicsState()
-    path.addClip()
-    // Subtle top highlight.
-    NSGradient(colors: [NSColor.white.withAlphaComponent(0.22), NSColor.white.withAlphaComponent(0)])!
-        .draw(in: CGRect(x: body.minX, y: body.midY, width: body.width, height: body.height / 2), angle: 270)
-
-    // Radar waves behind the bolt.
-    let c = CGPoint(x: body.midX, y: body.midY)
-    for (r, a) in [(0.40, 0.22), (0.30, 0.35), (0.20, 0.0)] where a > 0 {
-        let rad = body.width * r
-        let arc = NSBezierPath()
-        arc.appendArc(withCenter: c, radius: rad, startAngle: 0, endAngle: 360)
-        arc.lineWidth = body.width * 0.028
-        NSColor.white.withAlphaComponent(a).setStroke()
-        arc.stroke()
-    }
+    let sh = NSShadow()
+    sh.shadowColor = NSColor.black.withAlphaComponent(0.28)
+    sh.shadowBlurRadius = s * 0.02
+    sh.shadowOffset = NSSize(width: 0, height: -s * 0.008)
+    sh.set()
+    NSColor(red: 0xFF / 255, green: 0x5A / 255, blue: 0x1F / 255, alpha: 1).setFill()   // #FF5A1F
+    path.fill()
     NSGraphicsContext.restoreGraphicsState()
 
-    let config = NSImage.SymbolConfiguration(pointSize: body.width * 0.46, weight: .bold)
-        .applying(.init(paletteColors: [.white]))
-    if let sym = NSImage(systemSymbolName: "bolt.fill", accessibilityDescription: nil)?.withSymbolConfiguration(config) {
-        let r = CGRect(x: body.midX - sym.size.width / 2, y: body.midY - sym.size.height / 2,
-                       width: sym.size.width, height: sym.size.height)
-        NSGraphicsContext.saveGraphicsState()
-        let sh = NSShadow()
-        sh.shadowColor = NSColor.black.withAlphaComponent(0.3)
-        sh.shadowBlurRadius = s * 0.03
-        sh.shadowOffset = NSSize(width: 0, height: -s * 0.015)
-        sh.set()
-        sym.draw(in: r)
-        NSGraphicsContext.restoreGraphicsState()
+    // The Android icon's 5x7 dot-matrix down arrow: lit #161513, unlit #DA4F1D.
+    let lit: Set<Int> = [2, 7, 12, 17, 20, 22, 24, 26, 27, 28, 32]   // row * 5 + col, row 0 = top
+    let pitch = body.height * 0.62 / 7
+    let dot = pitch * 0.72
+    let gridW = pitch * 4 + dot, gridH = pitch * 6 + dot
+    let x0 = body.midX - gridW / 2, yTop = body.midY + gridH / 2
+    let on = NSColor(red: 0x16 / 255, green: 0x15 / 255, blue: 0x13 / 255, alpha: 1)
+    let off = NSColor(red: 0xDA / 255, green: 0x4F / 255, blue: 0x1D / 255, alpha: 1)
+    for row in 0..<7 {
+        for col in 0..<5 {
+            (lit.contains(row * 5 + col) ? on : off).setFill()
+            NSBezierPath(ovalIn: CGRect(x: x0 + CGFloat(col) * pitch, y: yTop - dot - CGFloat(row) * pitch,
+                                        width: dot, height: dot)).fill()
+        }
     }
     NSGraphicsContext.restoreGraphicsState()
     return rep.representation(using: .png, properties: [:])!
