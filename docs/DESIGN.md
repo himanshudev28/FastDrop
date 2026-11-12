@@ -27,11 +27,7 @@ Do **not** redesign it again. Only the things listed below need rearranging and 
    - Place the row near the top, under the device status and above Nearby, so the main options are visible without scrolling.
    - Keep Scan a code and Share with any device as rows.
    - Every feature stays reachable from Home or Send with one tap. Nothing is hidden in menus.
-2. **A bit more colour where it helps.**
-   - Use the category plates above.
-   - Give device ports a coloured type plate.
-   - Give the status line a coloured LED or tag.
-   - Don't add big new colour panels, and don't change the overall style.
+2. **No extra colour.** The owner decided against adding more. Keep colour exactly where the current build has it: the bottom dock, the existing small plates and icons, and the transfer panel states. The Quick send tiles follow the same rule as the existing plates. Don't add coloured panels, tints or extra accents anywhere.
 3. **No large empty areas.**
    - The done/transfer sheet must size to its content or use the space well.
    - Show file rows with type plates, plus actions: Open, Share, Show in folder, Send back, Send more.
