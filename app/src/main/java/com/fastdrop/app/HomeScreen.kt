@@ -86,8 +86,10 @@ class HomeScreen(host: MainActivity) : Screen(host) {
             T(R.string.tile_music, R.drawable.ic_music, Job.TEXT) { host.openPicker(PickerActivity.TAB_MUSIC) },
             T(R.string.tile_files, R.drawable.ic_file, null) { host.openPicker(PickerActivity.TAB_FILES) },
             T(R.string.tile_text, R.drawable.ic_edit, Job.TEXT) {
-                host.inputDialog(s(R.string.tile_text_title), "", android.text.InputType.TYPE_CLASS_TEXT or
+                // The picker's Text tab is phone-only; TV gets the themed input sheet.
+                if (Ui.tv(c)) host.inputDialog(s(R.string.tile_text_title), "", android.text.InputType.TYPE_CLASS_TEXT or
                     android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE) { host.setSendText(it) }
+                else host.openPicker(PickerActivity.TAB_TEXT)
             },
         )
         val rowL = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL }

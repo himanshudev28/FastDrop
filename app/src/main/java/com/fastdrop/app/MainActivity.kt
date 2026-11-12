@@ -521,26 +521,10 @@ class MainActivity : Activity(), Hub.Listener {
         pos.post { pos.requestFocus() }
     }
 
-    /** Text input dialog (keyboard works best in a real dialog). */
+    /** Text input as a themed bottom sheet (same look as the rest of the app; Enter confirms). */
     fun inputDialog(title: String, initial: String, inputType: Int, onOk: (String) -> Unit) {
-        val edit = EditText(this).apply {
-            setText(initial); setSelection(initial.length)
-            this.inputType = inputType
-            setSingleLine()
-        }
-        val box = LinearLayout(this).apply {
-            setPadding(Theme.dp(this@MainActivity, 20), Theme.dp(this@MainActivity, 8), Theme.dp(this@MainActivity, 20), 0)
-            addView(edit, LinearLayout.LayoutParams(-1, -2))
-        }
-        AlertDialog.Builder(this, if (Theme.dark) android.R.style.Theme_Material_Dialog_Alert else android.R.style.Theme_Material_Light_Dialog_Alert)
-            .setTitle(title).setView(box)
-            .setPositiveButton("OK") { _, _ ->
-                val v = edit.text.toString().trim()
-                if (v.isNotEmpty()) onOk(v)
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-        edit.requestFocus()
+        val multiline = inputType and android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE != 0
+        ScreenKit.inputSheet(this, title, "", initial, inputType, getString(android.R.string.ok), multiline, onOk)
     }
 
     // ---------------------------------------------------------------- received files
@@ -589,7 +573,7 @@ class MainActivity : Activity(), Hub.Listener {
             REQ_PICK -> {
                 val then = pickThen
                 pickThen = null
-                if (resultCode == RESULT_OK && Hub.selection.isNotEmpty()) {
+                if (resultCode == RESULT_OK && hasPayload()) {   // files or text from the Text tab
                     if (then != null) then()
                     else if (current !is SendScreen) push(SendScreen(this))
                     else current?.refresh()
