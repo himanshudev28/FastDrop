@@ -331,9 +331,7 @@ class MainActivity : Activity(), Hub.Listener {
     }
 
     /** Opens the History screen. */
-    fun openHistory() {
-        // TODO(lead): connect to HistoryScreen once it lands: push(HistoryScreen(this)).
-    }
+    fun openHistory() = HistoryScreen.show(this)
 
     fun showWebShare(includeApp: Boolean) = push(WebShareScreen(this, includeApp))
 
