@@ -30,7 +30,8 @@ data class HistoryEntry(
     val at: Long,                  // wall-clock ms when it finished
     val state: String,
     val message: String,
-    val text: String? = null,      // text / link transfers
+    val text: String? = null,      // text / link transfers (capped at [HistoryCodec.MAX_TEXT_CHARS])
+    val textTruncated: Boolean = false,   // [text] was cut; the full text only exists at receive time
 ) {
     val names: List<String> get() = files.map { it.name }
     val ok get() = state == HistoryCodec.DONE
@@ -42,6 +43,24 @@ object HistoryCodec {
     const val CANCELLED = "cancelled"
     const val MAX_NAMES = 50
     const val MAX_ENTRIES = 500
+    const val MAX_TEXT_CHARS = 4000
+    private const val ELLIPSIS = "\u2026"
+
+    /** Text kept in history: at most [MAX_TEXT_CHARS] chars (never splitting a surrogate pair) plus an ellipsis. */
+    fun capText(text: String): Pair<String, Boolean> {
+        if (text.length <= MAX_TEXT_CHARS) return text to false
+        var end = MAX_TEXT_CHARS
+        if (Character.isHighSurrogate(text[end - 1])) end--
+        return (text.substring(0, end) + ELLIPSIS) to true
+    }
+
+    /** Applies [capText] to an entry (no-op if already short or already truncated). */
+    fun withCappedText(e: HistoryEntry): HistoryEntry {
+        val t = e.text ?: return e
+        if (e.textTruncated) return e
+        val (c, cut) = capText(t)
+        return if (cut) e.copy(text = c, textTruncated = true) else e
+    }
 
     fun encode(list: List<HistoryEntry>): String {
         val a = JSONArray()
@@ -81,6 +100,7 @@ object HistoryCodec {
             .put("at", e.at).put("state", e.state).put("msg", e.message)
         e.peerId?.let { o.put("pid", it) }
         e.text?.let { o.put("text", it) }
+        if (e.textTruncated) o.put("tt", true)
         val fs = JSONArray()
         for (f in e.files.take(MAX_NAMES)) {
             val j = JSONObject().put("name", f.name).put("size", f.size)
@@ -106,7 +126,8 @@ object HistoryCodec {
             avgSpeed = o.optDouble("speed", 0.0), durationMs = o.optLong("dur"), at = o.optLong("at"),
             state = o.optString("state", FAILED), message = o.optString("msg"),
             text = if (o.has("text")) o.optString("text") else null,
-        )
+            textTruncated = o.optBoolean("tt", false),
+        ).let { withCappedText(it) }
     }
 }
 

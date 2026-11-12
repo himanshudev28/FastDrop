@@ -13,7 +13,24 @@ object Trust {
 
     private val prefs get() = Hub.app.getSharedPreferences("fastdrop_trust", Context.MODE_PRIVATE)
     private val lock = Any()
-    private val seen = LinkedHashMap<String, Long>()   // authenticated offer ids -> time seen (replay cache)
+    // Authenticated offer ids -> time seen. Persisted so a restart can't replay a captured offer.
+    private val replayLock = Any()
+    private var replay: ReplayCache? = null
+    private fun replayFile() = java.io.File(Hub.app.filesDir, "fd_replay.json")
+
+    private fun replayCache(now: Long): ReplayCache = replay ?: run {
+        val text = try { replayFile().takeIf { it.isFile }?.readText(Charsets.UTF_8) } catch (_: Exception) { null }
+        ReplayCache.decode(text, now).also { replay = it }
+    }
+
+    private fun persistReplay(c: ReplayCache) {
+        try {
+            val dst = replayFile()
+            val tmp = java.io.File(dst.parentFile, dst.name + ".tmp")
+            tmp.writeText(c.encode(), Charsets.UTF_8)
+            if (!tmp.renameTo(dst)) { dst.delete(); tmp.renameTo(dst) }
+        } catch (_: Exception) { }
+    }
 
     // ---- receiver side: senders we trust
 
@@ -34,8 +51,13 @@ object Trust {
         Entry(dev, e.optString("name", "Device"), e.optString("key"), e.optLong("added"))
     }
 
-    /** Trusts [dev] (replacing any older key) and returns the new key as hex. */
-    fun add(dev: String, name: String): String = synchronized(lock) {
+    /**
+     * Trusts [dev] and returns the new key as hex. Refuses (returns null) when [dev] is already
+     * trusted, so a spoofed device id can't replace a real key; only an explicit [rePair] may.
+     * Today the way to re-pair is to remove the device in Settings first.
+     */
+    fun add(dev: String, name: String, rePair: Boolean = false): String? = synchronized(lock) {
+        if (!rePair && load("trusted").has(dev)) return null
         val key = ByteArray(32).also { SecureRandom().nextBytes(it) }
         val hex = ProtoV2.hex(key)
         val o = load("trusted")
@@ -62,11 +84,10 @@ object Trust {
         val key = ProtoV2.unhex(e.key) ?: return false
         if (!ProtoV2.verifyAuth(key, id, dev, ts, files, text, auth)) return false
         if (!ProtoV2.tsOk(now, ts)) return false
-        synchronized(seen) {
-            val it = seen.entries.iterator()
-            while (it.hasNext()) if (now - it.next().value > ProtoV2.TS_WINDOW_MS) it.remove() else break
-            if (seen.containsKey(id)) return false
-            seen[id] = now
+        synchronized(replayLock) {
+            val c = replayCache(now)
+            if (!c.add(id, now)) return false
+            persistReplay(c)
         }
         return true
     }

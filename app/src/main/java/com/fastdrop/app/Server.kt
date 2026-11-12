@@ -82,7 +82,7 @@ object Server {
         val v2 = o.optInt("v", 1) >= 2
         val senderDev = if (v2) o.optString("dev").take(200) else ""
         val text: String? = if (v2 && o.has("text") && !o.isNull("text")) o.optString("text") else null
-        if (text != null && (text.isEmpty() || text.length > ProtoV2.MAX_TEXT)) { reply(ch, false, "invalid", v2); return }
+        if (text != null && (!ProtoV2.textLenOk(text))) { reply(ch, false, "invalid", v2); return }
         val arr = o.getJSONArray("files")
         if (arr.length() > 10_000) { reply(ch, false, "invalid", v2); return }
         val rawNames = ArrayList<String>(arr.length())
@@ -109,6 +109,10 @@ object Server {
         val trusted = v2 && senderDev.isNotEmpty() && ProtoV2.isHex64(auth) &&
             Trust.verifyOffer(senderDev, id, o.optLong("ts", 0L), rawNames.zip(files.map { it.size }), text, auth)
         val mode = Hub.autoMode
+        // A device id we already trust but whose offer isn't authenticated may be an impostor:
+        // never offer "Always accept" for it (that would overwrite the real key).
+        val knownDev = v2 && senderDev.isNotEmpty() && Trust.get(senderDev) != null
+        val canTrust = v2 && senderDev.isNotEmpty() && !trusted && !knownDev
         val auto = mode == Hub.AUTO_EVERYONE || (mode == Hub.AUTO_TRUSTED && trusted)
 
         if (!Hub.tryReserve()) { reply(ch, false, "busy", v2); return }
@@ -129,7 +133,7 @@ object Server {
             } else {
                 val offer = IncomingOffer(fromName, fromType, files, if (text != null) 0L else total, text,
                     code = if (v2) ProtoV2.confirmationCode(id) else "", trusted = trusted,
-                    canTrust = v2 && senderDev.isNotEmpty() && !trusted)
+                    canTrust = canTrust)
                 shown = offer
                 var noUi = false
                 Hub.offer = offer
@@ -149,7 +153,7 @@ object Server {
 
             val extra = JSONObject()
             // "Always accept from <sender>" ticked: pair by handing the sender a fresh key.
-            if (shown?.alwaysAccept == true && v2 && senderDev.isNotEmpty()) extra.put("trust", Trust.add(senderDev, fromName))
+            if (shown?.alwaysAccept == true && canTrust) Trust.add(senderDev, fromName)?.let { extra.put("trust", it) }
 
             if (text != null) {
                 // Text / link: nothing to stream. Accept, confirm immediately, keep it in the recent list.
@@ -172,7 +176,8 @@ object Server {
             val keys = ArrayList<String?>(files.size)
             val used = HashSet<String>()
             for (i in files.indices) {
-                val k = if (resumable && files[i].size > 0) ProtoV2.resumeKey(senderDev, rawNames[i], files[i].size, mtimes[i]) else null
+                // Only files whose offer carries a positive mtime may resume; the rest always start fresh.
+                val k = if (resumable && files[i].size > 0) ProtoV2.resumeKeyOrNull(senderDev, rawNames[i], files[i].size, mtimes[i]) else null
                 keys.add(if (k != null && used.add(k)) k else null)
             }
             val crc = v2 && o.optBoolean("crc")
@@ -293,6 +298,8 @@ class RxSession(
     private val got = Array(files.size) { AtomicLong() }
     private val doneChunks = Array(files.size) { ProtoV2.ChunkSet() }
     private val finished = BooleanArray(files.size)
+    /** Guards [finished] together with every Resume.put/remove for this session (finishFile vs checkpoint). */
+    private val recLock = Any()
     private val remaining = AtomicInteger(files.size)
     private val lock = Object()
     @Volatile var complete = false
@@ -371,9 +378,14 @@ class RxSession(
 
     private fun finishFile(i: Int) {
         val s = synchronized(sinks) { sinks[i] } ?: return
-        synchronized(finished) { if (finished[i]) return; finished[i] = true }
-        val uri = s.finish()
-        keys[i]?.let { Resume.remove(it) }
+        synchronized(recLock) { if (finished[i]) return; finished[i] = true }
+        val uri = try { s.finish() } catch (_: Exception) {
+            // Keep the resume record (the data is all there); closeOut() re-saves it. No "Received" entry.
+            synchronized(recLock) { finished[i] = false }
+            fail("Couldn't save ${files[i].name}")
+            return
+        }
+        synchronized(recLock) { keys[i]?.let { Resume.remove(it) } }
         Hub.addReceived(Received(files[i].name, files[i].size, uri, t.peer, files[i].app))
         if (t.histFiles.size < HistoryCodec.MAX_NAMES)                          // history hook
             t.histFiles.add(HFile(files[i].name, files[i].size, uri?.toString(),
@@ -394,13 +406,18 @@ class RxSession(
     private fun record(i: Int) {
         val key = keys[i] ?: return
         val loc = synchronized(sinks) { sinks[i] }?.location ?: return
-        Resume.put(Resume.Rec(key, Storage.cleanName(files[i].name), files[i].size, loc, doneChunks[i].snapshot(), System.currentTimeMillis()))
+        // Re-check "finished" under the same lock finishFile uses: a record written after the file was
+        // finalised would point at the finished MediaStore row and later get that file deleted.
+        synchronized(recLock) {
+            if (finished[i]) return
+            Resume.put(Resume.Rec(key, Storage.cleanName(files[i].name), files[i].size, loc, doneChunks[i].snapshot(), System.currentTimeMillis()))
+        }
     }
 
     /** Called about every 10 s while running so a killed app can still resume. */
     fun checkpoint() {
         for (i in files.indices) {
-            if (keys[i] == null || finished[i] || aborted) continue
+            if (keys[i] == null || aborted || synchronized(recLock) { finished[i] }) continue
             if (doneChunks[i].count() > 0) record(i)
         }
     }
@@ -413,7 +430,7 @@ class RxSession(
         synchronized(sinks) { aborted = true }
         for (i in files.indices) {
             val s = synchronized(sinks) { sinks[i] } ?: continue
-            if (finished[i]) continue
+            if (synchronized(recLock) { finished[i] }) continue
             val key = keys[i]
             if (key != null && doneChunks[i].count() > 0) { record(i); s.keep() }
             else { s.abort(); if (key != null) Resume.remove(key) }

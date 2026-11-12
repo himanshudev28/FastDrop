@@ -42,13 +42,16 @@ object Sender {
         queueAborted = false
         thread(name = "sender-multi") {
             var ok = 0
+            var busy = 0
             try {
                 for ((i, d) in devs.withIndex()) {
                     if (queueAborted) break
                     if (i > 0) {
-                        // The previous transfer releases the busy flag as it ends.
+                        // The previous transfer releases the busy flag as it ends. Never run without it.
                         var waited = 0
-                        while (!Hub.tryReserve() && waited < 100) { Thread.sleep(100); waited++ }
+                        var got = Hub.tryReserve()
+                        while (!got && waited < 100) { Thread.sleep(100); waited++; got = Hub.tryReserve() }
+                        if (!got) { busy++; continue }
                     }
                     Hub.multiInfo = "Device ${i + 1} of ${devs.size}"
                     if (run(ctx, d, items, text)) ok++
@@ -57,7 +60,7 @@ object Sender {
                 Hub.multiInfo = null
                 Hub.changed()
             }
-            Hub.message("Sent to $ok of ${devs.size} devices")
+            Hub.message("Sent to $ok of ${devs.size} devices" + if (busy > 0) " ($busy skipped: busy)" else "")
         }
     }
 
