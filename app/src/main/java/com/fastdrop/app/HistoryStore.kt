@@ -27,41 +27,62 @@ object HistoryStore {
 
     private fun file(ctx: Context) = File(ctx.filesDir, "fd_history.json")
 
-    /** Loads from disk (once) and refills Hub.received so received text / recent files survive restarts. */
+    /** True once the background load has finished; until then [all] only holds entries recorded since start-up. */
+    @Volatile var ready = false
+        private set
+    /** Changes made before the load finished; replayed over the decoded file so nothing is lost or clobbered. */
+    private val pending = ArrayList<(List<HistoryEntry>) -> List<HistoryEntry>>()
+
+    /**
+     * Starts loading from disk (once) on a background thread; returns immediately. When done it
+     * refills Hub.received (so received text / recent files survive restarts) and calls
+     * Hub.changed() on the main thread. Until then [all] is simply empty (plus anything new).
+     */
     fun init(ctx: Context) {
         synchronized(lock) {
             if (loaded) return
             loaded = true
-            list = try {
-                val f = file(ctx)
+        }
+        val app = ctx.applicationContext
+        Thread({
+            val decoded: List<HistoryEntry> = try {
+                val f = file(app)
                 if (f.isFile) HistoryCodec.capped(HistoryCodec.decode(f.readText(Charsets.UTF_8))) else emptyList()
             } catch (_: Exception) { emptyList() }
-        }
-        // Drop entries older than the "Keep history" setting before Hub.received is refilled from the list.
-        val kept = HistoryCodec.pruned(all(), keepDays(ctx), System.currentTimeMillis())
-        if (kept.size != all().size) {
-            synchronized(lock) { list = kept }
-            write(ctx.applicationContext, kept)
-        }
-        val restored = ArrayList<Received>()
-        for (e in all()) {
-            if (e.outgoing) continue
-            if (e.text != null) {
-                restored.add(Received(textPreview(e.text), e.text.toByteArray(Charsets.UTF_8).size.toLong(), null, e.peer, null, e.at, e.text))
-                continue
+            val merged: List<HistoryEntry>
+            synchronized(lock) {
+                var l = decoded
+                for (p in pending) l = p(l)
+                pending.clear()
+                // Drop entries older than the "Keep history" setting before Hub.received is refilled.
+                list = HistoryCodec.pruned(l, keepDays(app), System.currentTimeMillis())
+                ready = true
+                merged = list
             }
-            for (f in e.files) {
-                val u = f.uri ?: continue
-                val uri = try { Uri.parse(u) } catch (_: Exception) { continue }
-                if (uri.scheme == "file" && !File(uri.path ?: continue).exists()) continue
-                restored.add(Received(f.name, f.size, uri, e.peer, f.appPkg?.let { AppTag(f.appLabel ?: "", it, f.appVer ?: "") }, e.at))
+            write(app, merged)
+            val restored = ArrayList<Received>()
+            for (e in merged) {
+                if (e.outgoing) continue
+                if (e.text != null) {
+                    restored.add(Received(textPreview(e.text), e.text.toByteArray(Charsets.UTF_8).size.toLong(), null, e.peer, null, e.at, e.text))
+                    continue
+                }
+                for (f in e.files) {
+                    val u = f.uri ?: continue
+                    val uri = try { Uri.parse(u) } catch (_: Exception) { continue }
+                    if (uri.scheme == "file" && !File(uri.path ?: continue).exists()) continue
+                    restored.add(Received(f.name, f.size, uri, e.peer, f.appPkg?.let { AppTag(f.appLabel ?: "", it, f.appVer ?: "") }, e.at))
+                }
+                if (restored.size >= 200) break
             }
-            if (restored.size >= 200) break
-        }
-        // Newest first; anything received since start-up (already in Hub.received) stays on top.
-        for (r in restored.take(200)) Hub.received.add(r)
-        while (Hub.received.size > 200) Hub.received.removeAt(Hub.received.size - 1)
-        Hub.changed()
+            Hub.main.post {
+                // Newest first; anything received since start-up (already in Hub.received) stays on top.
+                for (r in restored.take(200)) Hub.received.add(r)
+                while (Hub.received.size > 200) Hub.received.removeAt(Hub.received.size - 1)
+                for (l in listeners) try { l() } catch (_: Exception) { }
+                Hub.changed()
+            }
+        }, "history-load").apply { isDaemon = true }.start()
     }
 
     // ---------------------------------------------------------------- retention ("Keep history")
@@ -112,7 +133,10 @@ object HistoryStore {
 
     fun uris(e: HistoryEntry): List<Uri> = e.files.mapNotNull { f -> f.uri?.let { try { Uri.parse(it) } catch (_: Exception) { null } } }
 
-    private fun add(e: HistoryEntry) = mutate { l -> HistoryCodec.capped(listOf(e) + l) }
+    private fun add(e: HistoryEntry) {
+        val c = HistoryCodec.withCappedText(e)      // full text is only needed at receive time
+        mutate { l -> HistoryCodec.capped(listOf(c) + l) }
+    }
 
     private fun write(ctx: Context, snapshot: List<HistoryEntry>) {
         io.execute {
@@ -127,8 +151,11 @@ object HistoryStore {
 
     private fun mutate(f: (List<HistoryEntry>) -> List<HistoryEntry>) {
         val snapshot: List<HistoryEntry>
-        synchronized(lock) { list = f(list); snapshot = list }
-        write(Hub.app, snapshot)
+        synchronized(lock) {
+            list = f(list); snapshot = list
+            if (!ready) pending.add(f)     // replayed after the file loads; don't overwrite the file yet
+        }
+        if (ready) write(Hub.app, snapshot)
         for (l in listeners) try { l() } catch (_: Exception) { }
         Hub.changed()
     }
@@ -187,5 +214,5 @@ object HistoryStore {
     }
 
     /** The text to send again for a text entry, else null. */
-    fun sendAgainText(e: HistoryEntry): String? = e.text?.takeIf { it.isNotEmpty() }
+    fun sendAgainText(e: HistoryEntry): String? = if (e.textTruncated) null else e.text?.takeIf { it.isNotEmpty() }
 }

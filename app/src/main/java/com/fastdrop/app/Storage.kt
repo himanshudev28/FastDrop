@@ -24,19 +24,29 @@ import java.util.UUID
 class Sink(
     val channel: FileChannel,
     private val closer: Closeable,
-    private val onFinish: () -> Uri?,
+    private val onFinish: () -> Uri,
     private val onAbort: () -> Unit,
     /** Resumable partials only: MediaStore uri (API 29+) or temp file path, saved in the resume record. */
     val location: String? = null,
 ) {
     @Volatile private var closed = false
 
+    /**
+     * Seals the file and returns its final uri. Throws if it could not be finalised: a resumable
+     * partial (has [location]) is left in place for a later retry; anything else is cleaned up.
+     */
     @Synchronized
-    fun finish(): Uri? {
-        if (closed) return null
+    @Throws(IOException::class)
+    fun finish(): Uri {
+        if (closed) throw IOException("already closed")
         closed = true
         Io.closeQuietly(closer)
-        return try { onFinish() } catch (_: Exception) { null }
+        try {
+            return onFinish()
+        } catch (e: Exception) {
+            if (location == null) try { onAbort() } catch (_: Exception) { }
+            throw if (e is IOException) e else IOException(e.message ?: "finalize failed", e)
+        }
     }
 
     /** Closes the file but leaves the partial on disk (for resume). */
@@ -102,14 +112,45 @@ object Storage {
 
     /** Length of the partial file, or -1 if it no longer exists. */
     fun partialLength(ctx: Context, location: String): Long = try {
-        if (Build.VERSION.SDK_INT >= 29) mediaLength(ctx, location)
+        // A row that is no longer IS_PENDING is a finished file: never reopen it for writing.
+        if (Build.VERSION.SDK_INT >= 29) { if (isPending(ctx, location) == true) mediaLength(ctx, location) else -1L }
         else File(location).let { if (it.isFile) it.length() else -1L }
     } catch (_: Exception) { -1L }
 
+    /** True only for hidden temp files this app makes for partials (".name.xxxx.fdpart"). */
+    fun isPartTempName(name: String): Boolean = name.length > 1 && name.startsWith(".") && name.endsWith(".fdpart")
+
+    /**
+     * Whether the MediaStore row at [location] still exists and is IS_PENDING. Null = couldn't tell.
+     * Finished files (IS_PENDING = 0) and missing rows give false.
+     */
+    @android.annotation.SuppressLint("NewApi")
+    @Suppress("DEPRECATION")
+    fun isPending(ctx: Context, location: String): Boolean? = try {
+        val uri = Uri.parse(location)
+        val cols = arrayOf(MediaStore.MediaColumns.IS_PENDING)
+        // Pending rows are hidden from plain queries, so ask for them explicitly.
+        val c = if (Build.VERSION.SDK_INT >= 30) {
+            val args = android.os.Bundle().apply {
+                putInt(MediaStore.QUERY_ARG_MATCH_PENDING, MediaStore.MATCH_INCLUDE)
+            }
+            ctx.contentResolver.query(uri, cols, args, null)
+        } else ctx.contentResolver.query(MediaStore.setIncludePending(uri), cols, null, null, null)
+        c?.use { if (it.moveToFirst()) it.getInt(0) == 1 else false } ?: false
+    } catch (_: Exception) { null }
+
+    /**
+     * Deletes a partial only if it is still a partial: a pending MediaStore row on API 29+, a hidden
+     * .fdpart temp file below. Never touches a finished (visible) file.
+     */
     fun deletePartial(ctx: Context, location: String) {
         try {
-            if (Build.VERSION.SDK_INT >= 29) ctx.contentResolver.delete(Uri.parse(location), null, null)
-            else File(location).delete()
+            if (Build.VERSION.SDK_INT >= 29) {
+                if (isPending(ctx, location) == true) ctx.contentResolver.delete(Uri.parse(location), null, null)
+            } else {
+                val f = File(location)
+                if (isPartTempName(f.name)) f.delete()
+            }
         } catch (_: Exception) { }
     }
 

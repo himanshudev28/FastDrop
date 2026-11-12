@@ -82,6 +82,16 @@ object ProtoV2 {
         return MessageDigest.isEqual(expected, utf8(given.lowercase()))
     }
 
+    /** Text limits count Unicode code points (like the spec, Mac and Python), not UTF-16 units. */
+    fun textLenOk(text: String): Boolean = text.isNotEmpty() && text.codePointCount(0, text.length) <= MAX_TEXT
+
+    /**
+     * Resume rule: only files whose offer includes a positive mtime may resume; anything else starts
+     * fresh (a provider without a modified time could otherwise splice two versions of a file).
+     */
+    fun resumeKeyOrNull(dev: String, name: String, size: Long, mtime: Long?): String? =
+        if (mtime != null && mtime > 0) resumeKey(dev, name, size, mtime) else null
+
     fun tsOk(now: Long, ts: Long): Boolean = ts > 0 && Math.abs(now - ts) <= TS_WINDOW_MS
 
     /** [mtime] null or <= 0 means "unknown" and contributes an empty string. */
@@ -164,5 +174,66 @@ object ProtoV2 {
         val t = s.trim()
         val low = t.lowercase()
         return (low.startsWith("http://") || low.startsWith("https://")) && low.length > 8 && t.none { it.isWhitespace() }
+    }
+}
+
+/**
+ * Seen authenticated session ids with the time each was seen (replay protection). Pure: the caller
+ * persists [encode] and restores with [decode]. Entries expire after [windowMs] and the cache keeps
+ * at most [max] (oldest dropped first).
+ */
+class ReplayCache(private val max: Int = MAX, private val windowMs: Long = ProtoV2.TS_WINDOW_MS) {
+    private val m = LinkedHashMap<String, Long>()
+
+    @Synchronized
+    fun prune(now: Long) {
+        m.values.removeAll { now - it > windowMs }
+        if (m.size > max) {
+            val drop = m.entries.sortedBy { it.value }.take(m.size - max).map { it.key }
+            drop.forEach { m.remove(it) }
+        }
+    }
+
+    /** Records [id] and returns true if it is new; false if it was already seen inside the window. */
+    @Synchronized
+    fun add(id: String, now: Long): Boolean {
+        prune(now)
+        if (m.containsKey(id)) return false
+        m[id] = now
+        prune(now)
+        return true
+    }
+
+    @Synchronized fun size() = m.size
+    @Synchronized fun contains(id: String) = m.containsKey(id)
+
+    @Synchronized
+    fun encode(): String {
+        val a = org.json.JSONArray()
+        for ((k, v) in m) a.put(org.json.JSONObject().put("id", k).put("t", v))
+        return a.toString()
+    }
+
+    companion object {
+        const val MAX = 2000
+
+        /** Tolerant: garbage gives an empty cache; expired entries are dropped. */
+        fun decode(s: String?, now: Long, max: Int = MAX, windowMs: Long = ProtoV2.TS_WINDOW_MS): ReplayCache {
+            val c = ReplayCache(max, windowMs)
+            if (s.isNullOrEmpty()) return c
+            try {
+                val a = org.json.JSONArray(s)
+                val tmp = ArrayList<Pair<String, Long>>()
+                for (i in 0 until a.length()) {
+                    val o = a.optJSONObject(i) ?: continue
+                    val id = o.optString("id"); val t = o.optLong("t")
+                    if (id.isNotEmpty() && t > 0) tmp.add(id to t)
+                }
+                tmp.sortBy { it.second }
+                for ((id, t) in tmp) c.m[id] = t
+            } catch (_: Exception) { }
+            c.prune(now)
+            return c
+        }
     }
 }

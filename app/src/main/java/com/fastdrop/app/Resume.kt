@@ -59,15 +59,27 @@ object Resume {
 
     fun remove(key: String) = synchronized(lock) { val m = loaded(); if (m.remove(key) != null) persist(m) }
 
-    /** Startup: deletes records older than 7 days together with their partial files. */
+    /**
+     * Startup. Drops records whose MediaStore row is no longer IS_PENDING (finished or gone: the
+     * location now names a real file we must never delete), and deletes records older than 7 days
+     * together with their partial files (only genuine partials: see [Storage.deletePartial]).
+     */
     fun prune(ctx: Context, now: Long = System.currentTimeMillis()) {
-        val old = synchronized(lock) {
-            val m = loaded()
-            val dead = m.values.filter { now - it.updated > MAX_AGE_MS }
-            dead.forEach { m.remove(it.key) }
-            if (dead.isNotEmpty()) persist(m)
-            dead
+        val snapshot = synchronized(lock) { loaded().values.toList() }
+        val stale = HashSet<String>()      // record dropped, file left alone
+        val dead = ArrayList<Rec>()        // record dropped, partial deleted
+        for (r in snapshot) {
+            val old = now - r.updated > MAX_AGE_MS
+            if (android.os.Build.VERSION.SDK_INT >= 29 && Storage.isPending(ctx, r.location) == false) stale.add(r.key)
+            else if (old) dead.add(r)
         }
-        for (r in old) try { Storage.deletePartial(ctx, r.location) } catch (_: Exception) { }
+        if (stale.isEmpty() && dead.isEmpty()) return
+        synchronized(lock) {
+            val m = loaded()
+            stale.forEach { m.remove(it) }
+            dead.forEach { m.remove(it.key) }
+            persist(m)
+        }
+        for (r in dead) try { Storage.deletePartial(ctx, r.location) } catch (_: Exception) { }
     }
 }
