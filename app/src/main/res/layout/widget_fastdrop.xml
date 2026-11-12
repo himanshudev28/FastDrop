@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 2x1 home-screen widget (RemoteViews: only simple views). Restyle freely, keep the ids. -->
+<!-- 2x1 home-screen widget (RemoteViews: only simple views). Flat fills, same hexes as the app tokens. Keep the ids. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:gravity="center_vertical"
-    android:padding="10dp"
+    android:padding="8dp"
     android:background="@drawable/widget_bg">
 
     <LinearLayout
@@ -27,13 +27,14 @@
                 android:layout_width="18dp"
                 android:layout_height="18dp"
                 android:src="@drawable/ic_send"
+                android:tint="@color/widget_on_send"
                 android:contentDescription="@null" />
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="6dp"
                 android:text="Send"
-                android:textColor="#FFFFFF"
+                android:textColor="@color/widget_on_send"
                 android:textSize="14sp"
                 android:textStyle="bold" />
         </LinearLayout>
@@ -45,18 +46,19 @@
             android:layout_weight="1"
             android:gravity="center"
             android:orientation="horizontal"
-            android:background="@drawable/widget_btn">
+            android:background="@drawable/widget_btn_receive">
             <ImageView
                 android:layout_width="18dp"
                 android:layout_height="18dp"
                 android:src="@drawable/ic_receive"
+                android:tint="@color/widget_on_receive"
                 android:contentDescription="@null" />
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="6dp"
                 android:text="Receive"
-                android:textColor="#FFFFFF"
+                android:textColor="@color/widget_on_receive"
                 android:textSize="14sp"
                 android:textStyle="bold" />
         </LinearLayout>
@@ -70,6 +72,6 @@
         android:gravity="center"
         android:singleLine="true"
         android:text="Ready"
-        android:textColor="#B8BED0"
+        android:textColor="@color/widget_ink2"
         android:textSize="12sp" />
 </LinearLayout>

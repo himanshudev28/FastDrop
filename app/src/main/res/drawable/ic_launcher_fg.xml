@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Adaptive icon foreground: white bolt inside the 66dp safe zone, soft shadow copy behind it -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <path android:fillColor="#33000000" android:pathData="M59.5,33L39.5,59.5H53L49.5,82L69.5,53.5H56L59.5,33Z" />
-    <path android:fillColor="#FFFFFF" android:strokeColor="#FFFFFF" android:strokeWidth="2.5" android:strokeLineJoin="round" android:pathData="M58,30.5L40.5,56.5H53.5L50,77.5L67.5,50.5H55L58,30.5Z" />
+    <!-- 5x7 dot-matrix down arrow: unlit then lit dots (DESIGN 8 step 12) -->
+    <path android:fillColor="#DA4F1D" android:pathData="M34,28.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM42.5,28.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM59.5,28.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM68,28.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM34,37a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM42.5,37a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM59.5,37a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM68,37a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM34,45.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM42.5,45.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM59.5,45.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM68,45.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM34,54a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM42.5,54a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM59.5,54a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM68,54a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM42.5,62.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM59.5,62.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM34,71a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM68,71a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM34,79.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM42.5,79.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM59.5,79.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM68,79.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0z" />
+    <path android:fillColor="#161513" android:pathData="M51,28.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM51,37a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM51,45.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM51,54a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM34,62.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM51,62.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM68,62.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM42.5,71a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM51,71a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM59.5,71a3,3 0 1,0 6,0a3,3 0 1,0 -6,0zM51,79.5a3,3 0 1,0 6,0a3,3 0 1,0 -6,0z" />
 </vector>

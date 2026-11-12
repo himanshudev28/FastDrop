@@ -139,7 +139,7 @@
             android:name=".FastDropTileService"
             android:exported="true"
             android:label="@string/tile_label"
-            android:icon="@drawable/ic_receive"
+            android:icon="@drawable/ic_tile"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />

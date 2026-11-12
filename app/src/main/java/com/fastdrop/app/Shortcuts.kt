@@ -68,20 +68,26 @@ object Shortcuts {
         return b.build()
     }
 
-    /** Neutral round icon (white glyph on slate) per device type; restyle by changing the colours here. */
+    /** Flat colour plate per device type, no circle. */
     @Suppress("NewApi")
     private fun icon(ctx: Context, type: String): Icon {
         val res = when (type) { "tv" -> R.drawable.ic_tv; "laptop" -> R.drawable.ic_laptop; else -> R.drawable.ic_phone }
+        // Flat plate in the device identity colour (DESIGN 2.3): phone ultramarine/white glyph,
+        // TV yellow and laptop green with an ink glyph.
+        val plate = when (type) { "tv" -> 0xFFFFC21A; "laptop" -> 0xFF1FAE52; else -> 0xFF2E3BFF }.toInt()
+        val glyph = if (type == "tv" || type == "laptop") 0xFF161513.toInt() else 0xFFFFFFFF.toInt()
         val size = 192
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         val adaptive = Build.VERSION.SDK_INT >= 26
         // Adaptive icons are masked to the inner 66 %: draw a full-bleed square, glyph well inside.
-        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF3A4156.toInt() }
-        if (adaptive) c.drawRect(0f, 0f, size.toFloat(), size.toFloat(), p) else c.drawCircle(size / 2f, size / 2f, size / 2f, p)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = plate }
+        if (adaptive) c.drawRect(0f, 0f, size.toFloat(), size.toFloat(), p)
+        else c.drawRoundRect(0f, 0f, size.toFloat(), size.toFloat(), size * 0.18f, size * 0.18f, p)
         try {
-            val dr = ctx.getDrawable(res)
+            val dr = ctx.getDrawable(res)?.mutate()
             if (dr != null) {
+                dr.setTint(glyph)
                 val inset = if (adaptive) size * 30 / 100 else size * 22 / 100
                 dr.setBounds(inset, inset, size - inset, size - inset)
                 dr.draw(c)
