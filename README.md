@@ -2,11 +2,11 @@
 
 # ⚡ FastDrop
 
-**Fast, offline file sharing between Android phones, Android TVs and any device with a browser.**
+**Fast, offline file sharing between Android phones, Android TVs, Macs, PCs and any device with a browser.**
 
 No internet. No accounts. No cloud. Just open it on both devices and tap.
 
-[![Platform](https://img.shields.io/badge/platform-Android%205.0%2B%20%7C%20Android%20TV-3DDC84?logo=android&logoColor=white)](#-install)
+[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Android%20TV%20%7C%20Mac%20%7C%20Windows%20%2F%20Linux%20CLI-3DDC84?logo=android&logoColor=white)](#-install)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.1-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Target SDK](https://img.shields.io/badge/targetSdk-35-informational)](#-notes)
 [![Dependencies](https://img.shields.io/badge/dependencies-1%20(ZXing)-success)](#-tech-stack)
@@ -28,19 +28,49 @@ No internet. No accounts. No cloud. Just open it on both devices and tap.
 | 📡 **Works offline** | Same Wi‑Fi? Devices find each other automatically. No Wi‑Fi at all? FastDrop builds its own direct link with Wi‑Fi Direct or a local hotspot. |
 | 📺 **TV‑ready** | Runs on Android TV with full D‑pad navigation, a built‑in file browser, and a "Show my QR" flow for TVs without cameras. |
 | 🌐 **Any device** | iPhone, PC or a phone without the app? **Share with any device** turns your phone into a tiny web server they can open in a browser. |
-| 🪶 **Tiny** | ~300 KB APK. No AndroidX. One library (ZXing for QR codes). Runs back to Android 5.0. |
+| 🪶 **Tiny** | Tiny APK. No AndroidX. One library (ZXing for QR codes). Runs back to Android 5.0. |
 | 🔒 **Private** | Files go straight from one device to the other on your local network. Nothing is uploaded anywhere. |
+| 🔁 **Resumes** | Interrupted transfers pick up where they stopped. Only the missing chunks are sent again. |
+| ✅ **Trusted devices** | Tick "Always accept from…" once and that device can send without a prompt. New senders show a 4‑digit confirmation code on both screens. |
+| 💬 **Text, links & clipboard** | Send a message, a link or your clipboard to another device, not just files. |
+| 👥 **Send to several** | Pick multiple devices and send to all of them in one go. |
+| 🕘 **History** | A persistent list of what you sent and received, with Copy and Open for text. |
+| 🎯 **Shortcuts** | Direct Share targets in the system share sheet, a Quick Settings tile and a home‑screen widget. |
+| 🧮 **Optional CRC32 check** | Verify every chunk when you want extra certainty (off by default, to stay fast). |
+| 🎨 **System / Light / Dark** | The new "Signal" look follows your system theme, or you can pick one. |
+| 💻 **Mac & PC** | A native Mac app (Apple silicon and Intel) and a Windows/Linux/macOS command‑line client. |
+
+> 💡 **Tip:** use a **5 GHz hotspot or Wi‑Fi** for full speed. 2.4 GHz tops out at about 11 MB/s.
+
+## 🖥 Platforms
+
+| Platform | What you get |
+|---|---|
+| 📱 **Android phones** and 📺 **Android TVs** | The full app, with D‑pad navigation on TV. Android 5.0+. |
+| 🍎 **Mac** (Apple silicon and Intel) | A native app with a menu bar item, Finder **Services** ("Send with FastDrop"), and drag‑and‑drop onto the menu‑bar icon. See [`mac/README.md`](mac/README.md). |
+| 💻 **Windows / Linux / macOS CLI** | [`tools/fastdrop.py`](tools/fastdrop.py), a single file that needs only the Python standard library. See [`tools/README.md`](tools/README.md). |
+| 🌐 **Any browser** | iPhone or any device without the app can use **Share with any device**. |
 
 ---
 
 ## 📦 Install
 
-1. **[⬇️ Download the latest APK](https://github.com/himanshudev28/FastDrop/releases/latest)** from Releases, or [build it yourself](#-build-from-source).
-2. Copy `FastDrop.apk` to the phone or TV and open it, or run:
+Both the APK and `FastDrop-mac.zip` come from the **[⬇️ latest Release](https://github.com/himanshudev28/FastDrop/releases/latest)**. You can also [build it yourself](#-build-from-source).
+
+### 📱 Android phone or TV
+1. Download `FastDrop.apk`, copy it to the phone or TV and open it, or run:
    ```bash
    adb install FastDrop.apk
    ```
-3. **On a TV:** put the APK on a USB stick and install it with a file manager, or use `adb` over the network.
+2. **On a TV:** put the APK on a USB stick and install it with a file manager, or use `adb` over the network.
+
+### 🍎 Mac
+1. Download and unzip `FastDrop-mac.zip`, then move `FastDrop.app` to **Applications**.
+2. The first time, **right‑click → Open** (then **Open** again). The app isn't notarized, so a double‑click is blocked by Gatekeeper.
+3. Allow **Local Network** access when macOS asks.
+
+### 💻 Windows / Linux PC
+Use the command‑line client. See [`tools/README.md`](tools/README.md) for setup, firewall rules and examples.
 
 > 💡 **Share the app without internet:** open **Settings → Share FastDrop app** and let your friend scan the codes. Their phone downloads the APK straight from yours.
 
@@ -122,6 +152,14 @@ Signing comes from repository secrets: `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `
 
 ---
 
+## 🔐 Security
+
+- **Transfers aren't encrypted, by design.** FastDrop uses plain TCP so weak TV processors don't become the bottleneck.
+- **Trusted devices** use a pairing key. Offers from a trusted sender are HMAC‑signed, so a device can't pretend to be one you trust. New senders always get a prompt with a 4‑digit confirmation code. You can remove a trusted device at any time in Settings.
+- **Use FastDrop on networks you trust.** Avoid public Wi‑Fi. Details are in [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
+
+---
+
 ## 🧪 Test from a Mac or PC
 
 [`tools/fdtest.py`](tools/fdtest.py) speaks the same protocol. It uses only the Python standard library.
@@ -149,7 +187,10 @@ app/src/main/java/com/fastdrop/app/
 ├── TransferService.kt     # foreground service + Wi‑Fi/wake locks
 ├── Qr*.kt                 # QR generate & scan (ZXing)
 └── ...                    # theme, animations, sheets, storage
+mac/                       # native SwiftUI Mac app
+tools/fastdrop.py          # Windows/Linux/macOS command-line client
 tools/fdtest.py            # desktop protocol test client
+docs/                      # PROTOCOL.md, DESIGN.md, release notes
 ```
 
 ## 🧰 Tech stack
