@@ -182,6 +182,9 @@ object Sender {
             val tr = Transfer(true, dev.name, total, items.size, Net.viaFor(ctrl.localAddress),
                 if (text != null) listOf("Text") else items.take(50).map { it.name }, text)
             tr.baseline = baseline
+            tr.peerId = dev.id                                                       // history hook
+            items.take(HistoryCodec.MAX_NAMES).forEach { tr.histFiles.add(HistoryStore.fileOf(it)) }
+            try { Shortcuts.noteUsed(ctx, dev) } catch (_: Exception) { }            // Direct Share ranking
             if (text != null) tr.done.set(total)
             else if (baseline > 0) tr.done.set(baseline)
             t = tr

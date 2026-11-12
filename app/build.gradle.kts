@@ -10,9 +10,17 @@ android {
     defaultConfig {
         applicationId = "com.fastdrop.app"
         minSdk = 21          // works on old Android TVs too
-        // Stay on 35: targeting 37 enables Android 17's local-network permission, which must be
-        // requested before any LAN / Wi-Fi Direct socket. Wire that in before bumping.
+        // Stay on 35 for now. Android 17 enforces ACCESS_LOCAL_NETWORK (runtime, NEARBY_DEVICES group)
+        // only for targetSdk >= 37. Already wired: manifest declaration (placeholder below, flips
+        // automatically) and the first-launch request (LocalNetwork.kt + MainActivity.onCreate).
+        // Left before bumping to 37: (1) test on a real Android 17 device that discovery (UDP
+        // multicast), the TCP server and sends still work with the permission granted, denied and
+        // revoked (Discovery/Server retry loops should recover after a grant, unverified);
+        // (2) add a denied-state banner/explanation in the UI; (3) re-check the other 36/37 behaviour
+        // changes; (4) bump compileSdk to 37 if you want the Manifest.permission constant.
         targetSdk = 35
+        manifestPlaceholders["localNetworkPermission"] =
+            if (targetSdk!! >= 37) "android.permission.ACCESS_LOCAL_NETWORK" else "android.permission.INTERNET"
         versionCode = 3
         versionName = "2.1"
     }
@@ -48,4 +56,6 @@ dependencies {
     // QR codes (encode + decode). Pure Java, no AndroidX; only uses APIs present on Android 5.
     implementation("com.google.zxing:core:3.5.4")
     testImplementation("junit:junit:4.13.2")
+    // Real org.json for JVM tests (the android.jar one is a stub that throws).
+    testImplementation("org.json:json:20240303")
 }

@@ -102,6 +102,9 @@ class Transfer(
     @Volatile var state = State.RUNNING
     @Volatile var message = ""
     @Volatile var finishedAt = 0L
+    // --- history hooks (HistoryStore): peer's device id when known, and per-file info for the entry
+    @Volatile var peerId: String? = null
+    val histFiles = CopyOnWriteArrayList<HFile>()
     private val closeables = CopyOnWriteArrayList<Closeable>()
 
     fun add(n: Long) { done.addAndGet(n); lastProgressAt = SystemClock.elapsedRealtime() }
@@ -261,10 +264,14 @@ object Hub {
         thread(isDaemon = true) { Storage.clearSendCache(app) }
         // Resume records (and their partial files) older than 7 days.
         thread(isDaemon = true) { try { Resume.prune(app) } catch (_: Exception) { } }
+        try { HistoryStore.init(app) } catch (_: Exception) { }      // history: restores Hub.received
         Server.start()
         Discovery.start()
         thread(name = "watchdog", isDaemon = true) { watchdog() }
     }
+
+    /** True once [init] has run (widget / tile can be asked before the app was ever opened). */
+    val ready: Boolean get() = started
 
     /** Can someone send to us right now? */
     fun receivable() = listener != null || autoActive
@@ -338,6 +345,7 @@ object Hub {
         t.closeAll()
         releaseLocks()
         busy.set(false)
+        try { HistoryStore.record(t) } catch (_: Exception) { }      // history hook
         changed()
         TransferService.update(this.app, statusLine(t))
         try { Links.onTransferEnded() } catch (_: Exception) { }
@@ -359,7 +367,11 @@ object Hub {
 
     /** Coalesced: a burst of changes becomes one UI refresh. */
     fun changed() {
-        if (changePosted.compareAndSet(false, true)) main.post { changePosted.set(false); listener?.onChanged() }
+        if (changePosted.compareAndSet(false, true)) main.post {
+            changePosted.set(false)
+            listener?.onChanged()
+            Integrations.onHubChanged()      // widget + Quick Settings tile
+        }
     }
     fun message(msg: String) = main.post {
         listener?.onMessage(msg) ?: android.widget.Toast.makeText(app, msg, android.widget.Toast.LENGTH_LONG).show()
@@ -421,6 +433,7 @@ object Hub {
                     end(t, State.FAILED, "Connection lost (no data for 30 s)")
                 } else {
                     TransferService.update(app, statusLine(t))
+                    Integrations.onProgress()    // widget progress, throttled to 1 per 2 s
                 }
             } catch (_: Exception) { }
         }

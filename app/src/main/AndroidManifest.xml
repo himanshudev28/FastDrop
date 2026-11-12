@@ -19,6 +19,11 @@
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="33" />
 
+    <!-- Android 17 local-network permission. The value comes from build.gradle.kts: it is
+         ACCESS_LOCAL_NETWORK only when targetSdk >= 37 (the docs say not to declare it earlier);
+         below that it is a harmless duplicate of INTERNET. See LocalNetwork.kt. -->
+    <uses-permission android:name="${localNetworkPermission}" tools:ignore="DuplicatePermissions" />
+
     <!-- Keep transfers alive in the background -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
@@ -95,6 +100,8 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="*/*" />
             </intent-filter>
+            <!-- Direct Share targets (recent devices), see Shortcuts.kt / res/xml/shortcuts.xml -->
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
             <!-- FastDrop QR codes scanned with the system camera: fastdrop://join?... -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -118,6 +125,26 @@
             android:name=".BrowserActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode" />
+
+        <!-- Home-screen widget (2x1): Send / Receive / status. See Integrations.kt -->
+        <receiver android:name=".FastDropWidget" android:exported="true" android:label="FastDrop">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_info" />
+        </receiver>
+
+        <!-- Quick Settings tile "FastDrop: receive" (API 24+; ignored by older systems) -->
+        <service
+            android:name=".FastDropTileService"
+            android:exported="true"
+            android:label="@string/tile_label"
+            android:icon="@drawable/ic_receive"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
         <!-- Result of installing a received app (PackageInstaller session) -->
         <receiver android:name=".InstallResultReceiver" android:exported="false" />

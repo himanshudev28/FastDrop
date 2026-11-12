@@ -82,7 +82,9 @@ class MainActivity : Activity(), Hub.Listener {
             val perms = ArrayList<String>()
             if (Build.VERSION.SDK_INT >= 33) perms.add(Manifest.permission.POST_NOTIFICATIONS)
             if (Build.VERSION.SDK_INT < 29) perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            if (perms.isNotEmpty()) ensurePermissions(perms.toTypedArray()) { }
+            // Android 17 local-network permission (no-op unless targetSdk >= 37, see LocalNetwork.kt)
+            perms.addAll(LocalNetwork.toRequest(this))
+            if (perms.isNotEmpty()) ensurePermissions(perms.toTypedArray()) { Discovery.nudge() }
             handleIntent(intent)
         }
     }
@@ -601,7 +603,19 @@ class MainActivity : Activity(), Hub.Listener {
 
     private fun handleIntent(intent: Intent?) {
         intent ?: return
+        // Widget / Quick Settings tile entry points (see Integrations.kt)
+        when (intent.getStringExtra(Integrations.EXTRA_OPEN)) {
+            Integrations.OPEN_SEND -> { setIntent(Intent()); startSend(); return }
+            Integrations.OPEN_RECEIVE -> { setIntent(Intent()); if (current !is ReceiveScreen) push(ReceiveScreen(this)); return }
+        }
         when (intent.action) {
+            // Launcher long-press shortcut for a recent device: pick files if needed, then send to it
+            Shortcuts.ACTION_SEND_TO_DEVICE -> {
+                val dev = Shortcuts.fromIntent(this, intent)
+                Shortcuts.reportUsed(this, intent)
+                setIntent(Intent())
+                if (dev != null) sendTo(dev) else startSend()
+            }
             Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE -> handleShare(intent)
             Intent.ACTION_VIEW -> {
                 val raw = intent.dataString
@@ -667,6 +681,9 @@ class MainActivity : Activity(), Hub.Listener {
         if (uris.isEmpty()) {
             intent.clipData?.let { c -> for (i in 0 until c.itemCount) c.getItemAt(i).uri?.let { uris.add(it) } }
         }
+        // Direct Share: the user picked a recent device in the share sheet -> send straight to it.
+        val target = Shortcuts.fromIntent(this, intent)
+        if (target != null) Shortcuts.reportUsed(this, intent)
         uris.removeAll { it.scheme.equals("file", ignoreCase = true) }
         val text = if (uris.isEmpty()) {
             try { intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()?.takeIf { it.isNotBlank() } } catch (_: Exception) { null }
@@ -677,7 +694,11 @@ class MainActivity : Activity(), Hub.Listener {
         if (text != null) {
             // A fastdrop:// join link is not content to send; ask before acting on it. Anything else goes as text.
             val join = JoinInfo.parse(text)
-            if (join != null) confirmJoinLink(join, codeRole(text)) else setSendText(text)
+            if (join != null) confirmJoinLink(join, codeRole(text))
+            else if (target != null && text.length <= ProtoV2.MAX_TEXT) {
+                Hub.selection = emptyList(); Hub.selectionText = text
+                sendTo(target)
+            } else setSendText(text)
             return
         }
         val count = uris.size
@@ -691,7 +712,8 @@ class MainActivity : Activity(), Hub.Listener {
                     toast("Couldn't read those files", 2)
                 } else {
                     Hub.selection = items
-                    if (current is SendScreen) current?.refresh() else push(SendScreen(this))
+                    if (target != null) sendTo(target)
+                    else if (current is SendScreen) current?.refresh() else push(SendScreen(this))
                 }
             }
         }

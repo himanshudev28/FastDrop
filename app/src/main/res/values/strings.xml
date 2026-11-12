@@ -1,0 +1,4 @@
+<resources>
+    <string name="widget_description">Send or receive with FastDrop</string>
+    <string name="tile_label">FastDrop: receive</string>
+</resources>

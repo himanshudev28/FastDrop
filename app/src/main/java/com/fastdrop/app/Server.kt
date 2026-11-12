@@ -158,6 +158,7 @@ object Server {
                 try { Io.writeJson(ch, JSONObject().put("ok", true)) } catch (_: Exception) { }
                 val preview = text.trim().lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(60) ?: "Text"
                 Hub.addReceived(Received(preview, text.toByteArray(Charsets.UTF_8).size.toLong(), null, fromName, text = text))
+                HistoryStore.recordIncomingText(fromName, senderDev, text)     // history hook
                 Hub.message("Text from $fromName")
                 Io.closeQuietly(ch)
                 return
@@ -165,6 +166,7 @@ object Server {
 
             val via = try { Net.viaFor(ch.socket().localAddress) } catch (_: Exception) { Device.VIA_LAN }
             val t = Transfer(false, fromName, total, files.size, via, files.take(50).map { it.name })
+            t.peerId = senderDev.ifEmpty { null }                               // history hook
             // Resume + CRC are protocol 2 only: they need the sender's device id and 8 MB chunks.
             val resumable = v2 && senderDev.isNotEmpty() && o.optInt("chunk", 0) == Proto.CHUNK
             val keys = ArrayList<String?>(files.size)
@@ -373,6 +375,9 @@ class RxSession(
         val uri = s.finish()
         keys[i]?.let { Resume.remove(it) }
         Hub.addReceived(Received(files[i].name, files[i].size, uri, t.peer, files[i].app))
+        if (t.histFiles.size < HistoryCodec.MAX_NAMES)                          // history hook
+            t.histFiles.add(HFile(files[i].name, files[i].size, uri?.toString(),
+                files[i].app?.label, files[i].app?.pkg, files[i].app?.version))
         if (remaining.decrementAndGet() == 0) {
             complete = true
             synchronized(lock) { lock.notifyAll() }
