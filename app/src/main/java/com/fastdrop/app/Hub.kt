@@ -132,6 +132,8 @@ class IncomingOffer(
     val trusted: Boolean = false,
     /** The sender can be trusted (protocol 2 with a device id) and isn't yet. */
     val canTrust: Boolean = false,
+    /** The sender's device id (protocol 2), or empty. */
+    val dev: String = "",
 ) {
     private val latch = CountDownLatch(1)
     /** Set by the UI ("Always accept from X") before respond(true). */

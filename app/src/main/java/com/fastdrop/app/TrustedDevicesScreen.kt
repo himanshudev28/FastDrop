@@ -23,6 +23,7 @@ class TrustedDevicesScreen(host: MainActivity) : Screen(host) {
             addView(bigHeader(host, s(R.string.trust_title)))
         }
         val scroll = ScrollView(c).apply {
+            isFocusable = false   // a focus stop with no visible focus is a trap
             overScrollMode = View.OVER_SCROLL_NEVER
             isVerticalScrollBarEnabled = false
             clipToPadding = false

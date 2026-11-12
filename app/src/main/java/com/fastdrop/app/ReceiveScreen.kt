@@ -55,14 +55,22 @@ class ReceiveScreen(host: MainActivity) : Screen(host) {
         val tvSteps = buildSteps()
 
         val content = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
-        content.addView(Ui.header(c, s(R.string.rcv_title), { host.pop() }), lp())
+        val hdr = Ui.header(c, s(R.string.rcv_title), { host.pop() })
+        // TV: the header lives in the left pane so the QR column starts at the top safe margin.
+        if (!Ui.tv(c)) content.addView(hdr, lp())
         if (wide) {
             val cols = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL }
             val left = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
             val right = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+            if (Ui.tv(c)) left.addView(hdr, lp())
             left.addView(statusBox, lp())
             left.addView(permBanner, lp())
             left.addView(tvSteps, lp(top = 8))
+            // TV: the scan action sits in the left pane (a dock would cover the QR).
+            if (Ui.tv(c) && QrScanActivity.hasCamera(c)) {
+                left.addView(Ui.jobButton(c, s(R.string.rcv_scan), Job.RECEIVE, R.drawable.ic_scan) { host.scanQr(false) },
+                    lp(top = 8).apply { leftMargin = Ui.gutter(c); rightMargin = Ui.gutter(c) })
+            }
             left.addView(accept, lp(top = 16))
             right.addView(qrBlock, lp())
             right.addView(detailsBox, lp(top = 8))
@@ -79,7 +87,7 @@ class ReceiveScreen(host: MainActivity) : Screen(host) {
 
         val page = Ui.scrollPage(c, content)
         val root = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
-        val camera = QrScanActivity.hasCamera(c)
+        val camera = QrScanActivity.hasCamera(c) && !Ui.tv(c)
         if (camera) {
             // The dock applies the bottom inset itself.
             page.setPadding(page.paddingLeft, page.paddingTop, page.paddingRight, 0)
@@ -289,35 +297,43 @@ class ReceiveScreen(host: MainActivity) : Screen(host) {
         statusBox.removeAllViews()
         val tvMode = Ui.tv(c)
         val g = Ui.gutter(c)
+        // TV (docs 5.5): the ready state is an ultramarine block with white text, readable from the sofa.
+        val block = tvMode && !starting && !failed
+        val ink = if (block) Job.RECEIVE.on else Theme.INK
+        val ink2 = if (block) Job.RECEIVE.on else Theme.INK_2
         val row = LinearLayout(c).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(g, dp(12), g, dp(16))
+            if (block) {
+                background = GradientDrawable().apply { setColor(Job.RECEIVE.fill); cornerRadius = dp(Theme.R_CTRL.toInt()).toFloat() }
+                setPadding(dp(16), dp(16), dp(16), dp(16))
+            } else setPadding(g, dp(12), g, dp(16))
         }
         val size = if (tvMode) 56 else 48
         val plate = when {
             failed -> Ui.plate(c, R.drawable.ic_alert, Job.DANGER.fill, Job.DANGER.on, size)
             starting -> Ui.plate(c, R.drawable.ic_wifi_direct, Theme.SURFACE_2, Theme.INK, size)
+            block -> Ui.plate(c, R.drawable.ic_receive, Job.RECEIVE.on, Job.RECEIVE.fill, size)
             else -> Ui.plate(c, R.drawable.ic_receive, Job.RECEIVE.fill, Job.RECEIVE.on, size)
         }
         row.addView(plate, LinearLayout.LayoutParams(dp(size), dp(size)).apply { marginEnd = dp(16) })
         val col = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
-        col.addView(Ui.text(c, title, Type.HERO).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END })
+        col.addView(Ui.text(c, title, Type.HERO, ink).apply { maxLines = if (tvMode) 3 else 2; ellipsize = android.text.TextUtils.TruncateAt.END })
         val metaRow = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        if (!starting) {
+        if (!starting && !block) {
             metaRow.addView(Ui.led(c, if (failed) Led.DANGER else Led.RECEIVE),
                 LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginEnd = dp(8) })
         }
-        metaRow.addView(Ui.text(c, meta, Type.META), LinearLayout.LayoutParams(0, -2, 1f))
+        metaRow.addView(Ui.text(c, meta, Type.META, ink2), LinearLayout.LayoutParams(0, -2, 1f))
         col.addView(metaRow, lp(top = 4))
         row.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
-        if (tag != null) row.addView(Ui.tag(c, tag), LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(12) })
-        statusBox.addView(row, lp())
+        if (tag != null && !block) row.addView(Ui.tag(c, tag), LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(12) })
+        statusBox.addView(row, if (block) lp().apply { leftMargin = g; rightMargin = g; bottomMargin = dp(12) } else lp())
         if (failed) {
             val retry = Ui.secondaryButton(c, s(R.string.action_retry), R.drawable.ic_refresh) { startHosting() }
             statusBox.addView(retry, lp(bottom = 0).apply { leftMargin = g; rightMargin = g; bottomMargin = dp(12) })
         }
-        statusBox.addView(Ui.rule(c))
+        if (!block) statusBox.addView(Ui.rule(c))
     }
 
     private fun lp(bottom: Int, top: Int = 0) = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(top); bottomMargin = dp(bottom) }

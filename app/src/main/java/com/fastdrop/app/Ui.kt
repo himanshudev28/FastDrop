@@ -207,7 +207,7 @@ object Ui {
      */
     fun focusFill(
         v: View, job: Job? = null, scale: Float = 1f, radiusDp: Float = 0f,
-        rest: Drawable? = v.background, pressFill: Int? = null
+        rest: Drawable? = v.background, pressFill: Int? = null, ring: Boolean = false
     ) {
         val ctx = v.context
         val tvMode = tv(ctx)
@@ -221,7 +221,9 @@ object Ui {
         v.background = StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_pressed), rect(press, r))
             addState(intArrayOf(android.R.attr.state_activated), rect(fill, r))
-            addState(intArrayOf(android.R.attr.state_focused), rect(fill, r))
+            // [ring]: the rest state is already this fill, so focus adds an INK outline to stay visible.
+            addState(intArrayOf(android.R.attr.state_focused),
+                if (ring) rect(fill, r, Theme.INK, dp(ctx, 3)) else rect(fill, r))
             addState(intArrayOf(), rest ?: ColorDrawable(0))
         }
         v.setOnFocusChangeListener { view, has ->
@@ -288,7 +290,7 @@ object Ui {
             }
             setTextColor(textColors)
             withGlyph(this, icon, textColors)
-            focusFill(this, job, 1.06f, Theme.R_CTRL, rest, pressFill = job.shade)
+            focusFill(this, job, 1.06f, Theme.R_CTRL, rest, pressFill = job.shade, ring = !tvMode)
             // Disabled look sits in front of everything.
             (background as StateListDrawable).let { sl ->
                 val all = StateListDrawable()
@@ -865,13 +867,14 @@ object Ui {
      */
     fun scrollPage(ctx: Context, content: LinearLayout, gutter: Boolean = false, bottomDp: Int = 24): ScrollView =
         ScrollView(ctx).apply {
+            isFocusable = false   // a focus stop with no visible focus is a trap
             overScrollMode = View.OVER_SCROLL_NEVER
             isVerticalScrollBarEnabled = false
             isFillViewport = true
             clipToPadding = false
             clipChildren = false
             val g = if (gutter) gutter(ctx) else 0
-            setPadding(g, if (tv(ctx)) dp(ctx, Theme.TV_SAFE_V) else 0, g, dp(ctx, bottomDp))
+            setPadding(g, if (tv(ctx)) dp(ctx, Theme.TV_SAFE_V) else 0, g, dp(ctx, if (tv(ctx)) maxOf(bottomDp, Theme.TV_SAFE_V) else bottomDp))
             addView(content, FrameLayout.LayoutParams(MATCH, WRAP))
             applyInsets(this, true, true)
         }
@@ -1054,11 +1057,19 @@ object Ui {
 
         private fun paint() {
             labels.forEachIndexed { i, t ->
-                t.setTextColor(if (i == sel) Theme.BG else Theme.INK)
-                // The selected segment is a plain INK block (0 radius: the outline clips the outer corners).
-                t.background = if (i == sel) ColorDrawable(Theme.INK) else null
-                if (i != sel) Ui.focusFill(t, null, 1.03f, 0f, null)
-                else { t.isFocusable = true }
+                if (i == sel) {
+                    t.setTextColor(Theme.BG)
+                    // The selected segment is a plain INK block; focus adds an inset BG ring so it stays visible.
+                    t.background = StateListDrawable().apply {
+                        addState(intArrayOf(android.R.attr.state_focused), Ui.rect(Theme.INK, 0f, Theme.BG, Theme.dp(t.context, 3)))
+                        addState(intArrayOf(), ColorDrawable(Theme.INK))
+                    }
+                    t.isFocusable = true
+                } else {
+                    // Focus fills INK, so the text flips to BG with it.
+                    t.setTextColor(states(Theme.INK, Theme.BG, false))
+                    Ui.focusFill(t, null, 1.03f, 0f, null)
+                }
             }
         }
 
@@ -1087,6 +1098,7 @@ object Ui {
         var onSelect: ((Int) -> Unit)? = null
 
         init {
+            isFocusable = false
             isHorizontalScrollBarEnabled = false
             overScrollMode = OVER_SCROLL_NEVER
             isFillViewport = true

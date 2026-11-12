@@ -110,7 +110,9 @@
     <string name="clear_title">Clear recent transfers?</string>
     <string name="clear_body">Files stay in Download/FastDrop.</string>
     <string name="home_receive">Receive</string>
+    <string name="offer_already_trusted">Already trusted. If this is really %1$s, remove it in Settings → Trusted devices to pair again.</string>
     <string name="home_send">Send</string>
+    <string name="home_send_files">Send files</string>
     <string name="home_wifi_name_unknown">Wi‑Fi</string>
     <string name="home_wifi_off">Wi‑Fi is off</string>
     <string name="home_wifi_off_meta">Turn it on, or use Receive to connect directly.</string>

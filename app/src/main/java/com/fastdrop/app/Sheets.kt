@@ -49,12 +49,26 @@ object Sheets {
     private class BlockState {
         var count = 0
         val saved = ArrayList<Pair<ViewGroup, Int>>()
+        var focused: java.lang.ref.WeakReference<View>? = null
+        /** Open cancellable sheets, oldest first, so Back can close the top one. */
+        val open = ArrayList<Handle>()
+    }
+
+    /** Closes the newest cancellable sheet on [root]. True when one was closed (Back key). */
+    fun dismissTop(root: FrameLayout): Boolean {
+        val st = root.getTag(K_BLOCK) as? BlockState ?: return false
+        st.open.removeAll { !it.showing }
+        val h = st.open.lastOrNull() ?: return false
+        h.dismiss()
+        st.open.remove(h)
+        return true
     }
 
     private fun blockOpen(root: FrameLayout) {
         val st = (root.getTag(K_BLOCK) as? BlockState) ?: BlockState().also { root.setTag(K_BLOCK, it) }
         if (st.count++ == 0) {
             st.saved.clear()
+            st.focused = root.findFocus()?.let { java.lang.ref.WeakReference(it) }
             for (i in 0 until root.childCount) {
                 val ch = root.getChildAt(i)
                 if (ch is ViewGroup) {
@@ -72,6 +86,12 @@ object Sheets {
         if (st.count > 0 && --st.count == 0) {
             for ((g, mode) in st.saved) g.descendantFocusability = mode
             st.saved.clear()
+            // Give D-pad focus back to what had it before the first sheet opened.
+            val prev = st.focused?.get()
+            st.focused = null
+            if (prev != null) root.post {
+                if (prev.isAttachedToWindow && prev.isFocusable && root.findFocus() == null && !prev.isInTouchMode) prev.requestFocus()
+            }
         }
     }
 
@@ -179,6 +199,7 @@ object Sheets {
         }
 
         // ---- dismissal
+        if (cancellable) (root.getTag(K_BLOCK) as? BlockState)?.open?.add(handle)
         var finished = false
         fun finish() {
             if (finished) return

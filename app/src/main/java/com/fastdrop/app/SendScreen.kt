@@ -162,7 +162,7 @@ internal object ScreenKit {
 }
 
 /** Intercepts the number keys 1-9 on the device list (remote or keyboard). */
-private class KeyRoot(ctx: Context, val onDigit: (Int) -> Boolean) : FrameLayout(ctx) {
+internal class KeyRoot(ctx: Context, val onDigit: (Int) -> Boolean) : FrameLayout(ctx) {
     override fun dispatchKeyEvent(e: KeyEvent): Boolean {
         if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) {
             val k = e.keyCode
@@ -304,6 +304,9 @@ class SendScreen(host: MainActivity) : Screen(host) {
         val sig = "$multiMode|$n|${Hub.devices.isEmpty()}"
         if (sig == lastHeader) return
         lastHeader = sig
+        // D-pad: keep focus on the same side of the header (Back vs Select/Cancel) after the rebuild.
+        val had = headerBox.findFocus()
+        val hadTrailing = had != null && had.left > headerBox.width / 2
         headerBox.removeAllViews()
         val title = if (multiMode) (if (n == 0) s(R.string.send_choose_several) else s(R.string.send_n_selected, n)) else s(R.string.send_title)
         val trailing: View? = when {
@@ -312,7 +315,12 @@ class SendScreen(host: MainActivity) : Screen(host) {
             else -> null
         }
         val back = { if (multiMode) exitMulti() else host.pop() }
-        headerBox.addView(Ui.header(ctx, title, back, trailing), lp())
+        val hv = Ui.header(ctx, title, back, trailing)
+        headerBox.addView(hv, lp())
+        if (had != null) {
+            val target: View? = if (hadTrailing) trailing else (hv as? ViewGroup)?.let { ScreenKit.firstFocusable(it) }
+            target?.post { target.requestFocus() }
+        }
     }
 
     private fun banner(title: String, sub: String, onClick: () -> Unit): View {
@@ -617,6 +625,7 @@ class SendScreen(host: MainActivity) : Screen(host) {
         chip("music", R.drawable.ic_music, music, R.plurals.kind_song)
         chip("files", R.drawable.ic_file, other, R.plurals.kind_file)
         val scrollChips = android.widget.HorizontalScrollView(ctx).apply {
+            isFocusable = false
             isHorizontalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
             setPadding(g, dp(12), g, dp(12))

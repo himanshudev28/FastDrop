@@ -102,9 +102,32 @@ class MainActivity : Activity(), Hub.Listener {
         root.setBackgroundColor(Theme.BG)
         // Rebuild the visible screen for the new size; its state lives in its fields.
         val s = current ?: return
-        views.remove(s)?.let { container.removeView(it) }
-        container.addView(buildView(s), FrameLayout.LayoutParams(-1, -1))
+        // D-pad: remember where focus was (child-index path) and put it back on the rebuilt twin.
+        val old = views.remove(s)
+        var path: ArrayList<Int>? = null
+        if (old != null) {
+            val f = old.findFocus()
+            if (f != null) {
+                val p = ArrayList<Int>()
+                var v: View = f
+                while (v !== old) {
+                    val par = v.parent as? ViewGroup ?: break
+                    p.add(0, par.indexOfChild(v)); v = par
+                }
+                if (v === old) path = p
+            }
+            container.removeView(old)
+        }
+        val nv = buildView(s)
+        container.addView(nv, FrameLayout.LayoutParams(-1, -1))
         s.refresh()
+        path?.let { p ->
+            nv.post {
+                var v: View = nv
+                for (i in p) { v = (v as? ViewGroup)?.getChildAt(i) ?: return@post }
+                if (v.isFocusable) v.requestFocus()
+            }
+        }
     }
 
     override fun onStart() {
@@ -178,6 +201,7 @@ class MainActivity : Activity(), Hub.Listener {
         // A confirm sheet sits above the progress / offer sheets, so it goes first.
         if (dismissTopSheet()) return
         if (transferUi.onBack()) return
+        if (Sheets.dismissTop(root)) return
         val c = current
         if (c != null && c.onBack()) return
         if (stack.size > 1) pop() else finish()
@@ -231,7 +255,7 @@ class MainActivity : Activity(), Hub.Listener {
             container.addView(v, FrameLayout.LayoutParams(-1, -1))
             Anim.screenIn(v, forward)
             if (started) show(into)
-            if (Ui.tv(this)) v.post { into.firstFocus()?.requestFocus() }
+            if (Ui.tv(this) || !container.isInTouchMode) v.post { into.firstFocus()?.requestFocus() }
         }
         if (outWasShown) out?.onHide()
         updateKeepScreenOn()
@@ -407,7 +431,7 @@ class MainActivity : Activity(), Hub.Listener {
     /** Makes [text] the thing to send (instead of files) and opens "Send to". */
     fun setSendText(text: String) {
         if (text.isBlank()) { toast("Nothing to send", 2); return }
-        if (text.length > ProtoV2.MAX_TEXT) { toast("Text is too long (max 100 000 characters)", 2); return }
+        if (text.codePointCount(0, text.length) > ProtoV2.MAX_TEXT) { toast("Text is too long (max 100 000 characters)", 2); return }
         Hub.selection = emptyList()
         Hub.selectionText = text
         if (current is SendScreen) current?.refresh() else push(SendScreen(this))

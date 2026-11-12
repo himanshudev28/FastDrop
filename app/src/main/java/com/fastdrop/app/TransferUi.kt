@@ -185,6 +185,7 @@ class TransferUi(private val host: MainActivity) {
             frame.addView(panel, LinearLayout.LayoutParams(-1, -2))
             frame.addView(tip, LinearLayout.LayoutParams(-1, -2))
             val scroll = ScrollView(ctx).apply {
+            isFocusable = false   // a focus stop with no visible focus is a trap
                 overScrollMode = View.OVER_SCROLL_NEVER
                 isVerticalScrollBarEnabled = false
                 addView(listBox, FrameLayout.LayoutParams(-1, -2))
@@ -554,7 +555,7 @@ class TransferUi(private val host: MainActivity) {
                 Mode.NONE -> {}
             }
             val f = focus
-            if (f != null && Ui.tv(ctx)) f.post { f.requestFocus() }
+            if (f != null && (Ui.tv(ctx) || !f.isInTouchMode)) f.post { f.requestFocus() }
         }
     }
 
@@ -579,6 +580,7 @@ class TransferUi(private val host: MainActivity) {
 
     /** A ScrollView that never grows taller than [maxPx] (the received text, max 60 % of the screen). */
     private class CappedScroll(ctx: Context, private val maxPx: Int) : ScrollView(ctx) {
+        init { isFocusable = false }
         override fun onMeasure(w: Int, h: Int) {
             super.onMeasure(w, MeasureSpec.makeMeasureSpec(maxPx, MeasureSpec.AT_MOST))
         }
@@ -702,6 +704,10 @@ class TransferUi(private val host: MainActivity) {
         if (offer.canTrust && !offer.trusted) {
             body.addView(Ui.checkRow(ctx, Job.RECEIVE, str(R.string.always_accept, offer.from), false) { offer.alwaysAccept = it },
                 LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
+        }
+        if (offer.dev.isNotEmpty() && !offer.trusted && Trust.get(offer.dev) != null) {
+            body.addView(Ui.text(ctx, str(R.string.offer_already_trusted, offer.from), Type.META).apply { setPadding(g, dp(8), g, 0) },
+                LinearLayout.LayoutParams(-1, -2))
         }
         val buttons = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; setPadding(g, dp(8), g, 0) }
         val decline = Ui.secondaryButton(ctx, str(R.string.action_decline)) { answerOffer(offer, false) }

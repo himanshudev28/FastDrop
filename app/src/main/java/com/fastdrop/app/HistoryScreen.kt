@@ -95,6 +95,7 @@ class HistoryScreen(host: MainActivity) : Screen(host) {
         clearBtn = clear
         listBox = Ui.column(c)
         scroll = ScrollView(c).apply {
+            isFocusable = false   // a focus stop with no visible focus is a trap
             overScrollMode = View.OVER_SCROLL_NEVER
             isVerticalScrollBarEnabled = false
             clipToPadding = false
@@ -372,7 +373,7 @@ class HistoryScreen(host: MainActivity) : Screen(host) {
                 add(Ui.secondaryButton(c, s(R.string.hist_action_copy), R.drawable.ic_copy, onClick = copy))
             } else add(Ui.jobButton(c, s(R.string.hist_action_copy), Job.TEXT, R.drawable.ic_copy, copy))
             add(Ui.secondaryButton(c, s(R.string.hist_action_share), R.drawable.ic_share, onClick = act { shareText(e.text) }))
-            add(Ui.secondaryButton(c, s(R.string.hist_action_send_text_again), R.drawable.ic_send, onClick = act { sendTextAgain(e) }))
+            if (!e.textTruncated) add(Ui.secondaryButton(c, s(R.string.hist_action_send_text_again), R.drawable.ic_send, onClick = act { sendTextAgain(e) }))
         } else {
             val install = isInstallable(e)
             if (install) add(Ui.jobButton(c, s(R.string.hist_action_install), Job.OK, R.drawable.ic_install, act { install(e) }))

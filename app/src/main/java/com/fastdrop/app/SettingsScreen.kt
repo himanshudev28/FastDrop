@@ -44,15 +44,9 @@ class SettingsScreen(host: MainActivity) : Screen(host) {
 
         add(bigHeader(host, s(R.string.set_title)))
 
-        // Device
-        add(Ui.section(c, s(R.string.set_sec_device)))
-        nameBox = Ui.column(c)
-        add(nameBox)
-        renderName()
-
         // Appearance (phone only: TV is always dark)
         if (!tvMode) {
-            section(R.string.set_sec_appearance)
+            add(Ui.section(c, s(R.string.set_sec_appearance)))
             val box = LinearLayout(c).apply {
                 orientation = LinearLayout.VERTICAL
                 val g = Ui.gutter(c)
@@ -66,6 +60,12 @@ class SettingsScreen(host: MainActivity) : Screen(host) {
                 options.indexOf(Theme.appearance(c)).coerceAtLeast(0)) { applyAppearance(options[it]) }, lp())
             add(box)
         }
+
+        // Device
+        if (!tvMode) section(R.string.set_sec_device) else add(Ui.section(c, s(R.string.set_sec_device)))
+        nameBox = Ui.column(c)
+        add(nameBox)
+        renderName()
 
         // Receiving
         section(R.string.set_sec_receiving)
@@ -153,6 +153,9 @@ class SettingsScreen(host: MainActivity) : Screen(host) {
 
     private fun renderAuto() {
         val c = ctx
+        // Keep D-pad focus on the same radio after the rows are rebuilt.
+        var focusIdx = -1
+        for (i in 0 until autoBox.childCount) if (autoBox.getChildAt(i).hasFocus()) focusIdx = i
         autoBox.removeAllViews()
         val modes = listOf(
             Triple(Hub.AUTO_ASK, R.string.set_accept_ask, R.string.set_accept_ask_hint),
@@ -164,6 +167,7 @@ class SettingsScreen(host: MainActivity) : Screen(host) {
                 if (Hub.autoMode != mode) { Hub.autoMode = mode; renderAuto() }
             }, lp())
         }
+        if (focusIdx >= 0) autoBox.getChildAt(focusIdx)?.requestFocus()
     }
 
     private fun versionName(): String = try {
@@ -183,6 +187,7 @@ class SettingsScreen(host: MainActivity) : Screen(host) {
                 try { Discovery.nudge() } catch (_: Exception) { }
                 renderName()
                 Hub.changed()
+                firstRow?.let { r -> r.post { if (!r.isInTouchMode) r.requestFocus() } }
             }
         }
         nameBox.removeAllViews()

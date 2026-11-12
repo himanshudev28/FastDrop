@@ -236,6 +236,7 @@ class PickerActivity : Activity() {
         root.addView(column, FrameLayout.LayoutParams(-1, -1))
 
         bar = PickUi.FloatingBar(this, getString(R.string.pick_send)) { next() }
+        bar.button.id = View.generateViewId()
         root.addView(bar, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         return root
     }
@@ -337,6 +338,13 @@ class PickerActivity : Activity() {
         else clip.getItemAt(0).coerceToText(this)?.toString()?.takeIf { it.isNotBlank() }
     } catch (_: Exception) { null }
 
+    /** D-pad: left / right off a list's edge reaches the Send bar, so a long list never strands it. */
+    private fun linkBar(v: View) {
+        if (Ui.tv(this)) return
+        v.nextFocusLeftId = bar.button.id
+        v.nextFocusRightId = bar.button.id
+    }
+
     // ---------- media tabs (photos / videos / music) ----------
 
     private fun isPicked(m: MediaItem) = picks.containsKey("m:${m.uri}")
@@ -347,6 +355,7 @@ class PickerActivity : Activity() {
         if (kind == MediaKind.AUDIO) {
             val list = ListView(this)
             PickerViews.styleList(this, list)
+            linkBar(list)
             val px = dp(96)
             val ad = RowsAdapter(this, { mediaItems[kind]?.size ?: 0 }) { h, i ->
                 val m = mediaItems[kind]!![i]
@@ -387,6 +396,7 @@ class PickerActivity : Activity() {
                 overScrollMode = View.OVER_SCROLL_NEVER
                 isVerticalScrollBarEnabled = false
             }
+            linkBar(grid)
             val ad = GridAdapter(this, { mediaItems[kind] }, kind == MediaKind.VIDEO, px, ::isPicked)
             grid.adapter = ad
             grid.setOnItemClickListener { _, v, pos, _ ->
@@ -501,6 +511,7 @@ class PickerActivity : Activity() {
     private fun buildAppsPane(): View {
         val list = ListView(this)
         PickerViews.styleList(this, list)
+        linkBar(list)
         val ad = RowsAdapter(this, { apps.size }) { h, i ->
             val a = apps[i]
             Thumbs.app(h.iv, a.pkg)
@@ -578,6 +589,7 @@ class PickerActivity : Activity() {
         filesList = l
         page.addView(l, LinearLayout.LayoutParams(-1, -2))
         val sv = ScrollView(this).apply {
+            isFocusable = false   // a focus stop with no visible focus is a trap
             overScrollMode = View.OVER_SCROLL_NEVER
             isVerticalScrollBarEnabled = false
             clipToPadding = false

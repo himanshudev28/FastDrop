@@ -56,6 +56,7 @@ class HomeScreen(host: MainActivity) : Screen(host) {
 
     override fun build(): View {
         val c = ctx
+        if (Ui.tv(c)) return buildTv()
         val wide = Ui.wide(c)
         built = false
         sigHero = null; sigNearby = null; sigRecent = null; sigStrip = null
@@ -78,20 +79,7 @@ class HomeScreen(host: MainActivity) : Screen(host) {
         val quick = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
         quick.addView(Ui.section(c, s(R.string.home_quick_send)), lp())
         val grid = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL; val g = Ui.gutter(c); setPadding(g, 0, g, 0) }
-        class T(val label: Int, val icon: Int, val job: Job?, val go: () -> Unit)
-        val tiles = listOf(
-            T(R.string.tile_apps, R.drawable.ic_apps, Job.OK) { host.openPicker(PickerActivity.TAB_APPS) },
-            T(R.string.tile_photos, R.drawable.ic_photo, Job.WEB) { host.openPicker(PickerActivity.TAB_PHOTOS) },
-            T(R.string.tile_videos, R.drawable.ic_video, Job.RECEIVE) { host.openPicker(PickerActivity.TAB_VIDEOS) },
-            T(R.string.tile_music, R.drawable.ic_music, Job.TEXT) { host.openPicker(PickerActivity.TAB_MUSIC) },
-            T(R.string.tile_files, R.drawable.ic_file, null) { host.openPicker(PickerActivity.TAB_FILES) },
-            T(R.string.tile_text, R.drawable.ic_edit, Job.TEXT) {
-                // The picker's Text tab is phone-only; TV gets the themed input sheet.
-                if (Ui.tv(c)) host.inputDialog(s(R.string.tile_text_title), "", android.text.InputType.TYPE_CLASS_TEXT or
-                    android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE) { host.setSendText(it) }
-                else host.openPicker(PickerActivity.TAB_TEXT)
-            },
-        )
+        val tiles = quickTiles()
         val rowL = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL }
         tiles.forEachIndexed { i, t ->
             rowL.addView(tile(t.job, t.icon, s(t.label), t.go),
@@ -157,6 +145,172 @@ class HomeScreen(host: MainActivity) : Screen(host) {
         return root
     }
 
+
+    private class T(val label: Int, val icon: Int, val job: Job?, val go: () -> Unit)
+
+    private fun quickTiles(): List<T> {
+        val c = ctx
+        return listOf(
+            T(R.string.tile_apps, R.drawable.ic_apps, Job.OK) { host.openPicker(PickerActivity.TAB_APPS) },
+            T(R.string.tile_photos, R.drawable.ic_photo, Job.WEB) { host.openPicker(PickerActivity.TAB_PHOTOS) },
+            T(R.string.tile_videos, R.drawable.ic_video, Job.RECEIVE) { host.openPicker(PickerActivity.TAB_VIDEOS) },
+            T(R.string.tile_music, R.drawable.ic_music, Job.TEXT) { host.openPicker(PickerActivity.TAB_MUSIC) },
+            T(R.string.tile_files, R.drawable.ic_file, null) { host.openPicker(PickerActivity.TAB_FILES) },
+            T(R.string.tile_text, R.drawable.ic_edit, Job.TEXT) {
+                // The picker's Text tab is phone-only; TV gets the themed input sheet.
+                if (Ui.tv(c)) host.inputDialog(s(R.string.tile_text_title), "", android.text.InputType.TYPE_CLASS_TEXT or
+                    android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE) { host.setSendText(it) }
+                else host.openPicker(PickerActivity.TAB_TEXT)
+            },
+        )
+    }
+
+    // ---------------------------------------------------------------- TV two-pane (docs 5.1, 5.4, 5.5)
+
+    private var leftBox: LinearLayout? = null
+    private var rightBox: LinearLayout? = null
+    private var lastLeft: View? = null
+    private var lastRight: View? = null
+    private val portViews = ArrayList<View>()
+    private var tvHint: View? = null
+
+    private fun ensureId(v: View): Int { if (v.id == View.NO_ID) v.id = View.generateViewId(); return v.id }
+
+    /** Explicit pane links: right from the left pane lands on the last-focused right item (or the first port), left comes back. */
+    private fun linkPanes() {
+        val l = leftBox ?: return
+        val r = rightBox ?: return
+        val lf = ArrayList<View>(); l.addFocusables(lf, View.FOCUS_RIGHT)
+        val rf = ArrayList<View>(); r.addFocusables(rf, View.FOCUS_LEFT)
+        val toRight = (lastRight?.takeIf { it.isAttachedToWindow && it.isFocusable } ?: rf.firstOrNull())
+        val toLeft = (lastLeft?.takeIf { it.isAttachedToWindow && it.isFocusable } ?: sendBtn?.takeIf { it.isAttachedToWindow } ?: lf.firstOrNull())
+        val rid = toRight?.let { ensureId(it) } ?: View.NO_ID
+        val lid = toLeft?.let { ensureId(it) } ?: View.NO_ID
+        for (v in lf) v.nextFocusRightId = rid
+        for (v in rf) v.nextFocusLeftId = lid
+        // Vertical moves stay inside a pane: the ends of each pane point at themselves.
+        val loc = IntArray(2)
+        for (list in listOf(lf, rf)) {
+            if (list.isEmpty()) continue
+            val ys = list.map { loc.also { _ -> it.getLocationOnScreen(loc) }[1] }
+            val minY = ys.min(); val maxY = ys.max()
+            list.forEachIndexed { i, v ->
+                v.nextFocusUpId = if (ys[i] <= minY + dp(8)) ensureId(v) else View.NO_ID
+                v.nextFocusDownId = if (ys[i] >= maxY - dp(8)) ensureId(v) else View.NO_ID
+            }
+        }
+    }
+
+    private fun inside(box: View?, v: View?): Boolean {
+        var p: android.view.ViewParent? = v?.parent
+        while (p != null) { if (p === box) return true; p = p.parent }
+        return false
+    }
+
+    private fun buildTv(): View {
+        val c = ctx
+        built = false
+        sigHero = null; sigNearby = null; sigRecent = null; sigStrip = null
+        seenNearby.clear()
+        heroBox = Ui.column(c)
+        nearbyBox = Ui.column(c)
+        recentBox = Ui.column(c)
+        val g = Ui.gutter(c)
+
+        // Left pane: who we are, then every action.
+        val left = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+        left.addView(header(), lp())
+        left.addView(heroBox, lp())
+        val send = Ui.jobButton(c, s(R.string.home_send_files), Job.SEND, R.drawable.ic_send) { host.startSend() }
+        sendBtn = send
+        left.addView(send, lp(top = 4).apply { marginStart = g; marginEnd = g })
+
+        left.addView(Ui.section(c, s(R.string.home_quick_send)), lp(top = 8))
+        val tiles = quickTiles()
+        val grid = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL; setPadding(g, 0, g, dp(8)) }
+        for (r in 0 until 2) {
+            val rowL = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL }
+            for (k in 0 until 3) {
+                val t = tiles[r * 3 + k]
+                rowL.addView(tile(t.job, t.icon, s(t.label), t.go),
+                    LinearLayout.LayoutParams(0, -2, 1f).apply { if (k > 0) marginStart = dp(8) })
+            }
+            grid.addView(rowL, lp(top = if (r > 0) 8 else 0))
+        }
+        left.addView(grid, lp(top = 4))
+
+        left.addView(Ui.section(c, s(R.string.home_other_ways)), lp(top = 8))
+        left.addView(Ui.row(c, null, s(R.string.send_show_qr), s(R.string.home_receive_hint), Ui.chevron(c, Job.RECEIVE),
+            lead = Ui.plate(c, R.drawable.ic_scan, Job.RECEIVE.fill, Job.RECEIVE.on, 40, Job.RECEIVE),
+            job = Job.RECEIVE) { host.push(ReceiveScreen(host)) }, lp())
+        if (QrScanActivity.hasCamera(c)) {
+            val ink = Theme.plateFor("files")
+            left.addView(Ui.row(c, null, s(R.string.home_scan_code), s(R.string.home_scan_code_sub), Ui.chevron(c),
+                lead = Ui.plate(c, R.drawable.ic_scan, ink.fill, ink.on, 40)) { host.scanQr(true) }, lp())
+        }
+        val web = Theme.plateFor("browser")
+        left.addView(Ui.row(c, null, s(R.string.home_share_any), s(R.string.home_share_any_sub), Ui.chevron(c, Job.WEB),
+            lead = Ui.plate(c, R.drawable.ic_globe, web.fill, web.on, 40, Job.WEB), job = Job.WEB) { host.showWebShare(false) }, lp())
+
+        // Right pane: the transfer strip, the ports, then Recent.
+        val right = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+        val nearby = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+        nearby.addView(Ui.section(c, s(R.string.home_nearby)), lp())
+        if (hasNumberKeys()) {
+            tvHint = Ui.text(c, s(R.string.send_press_keys), Type.META).apply { setPadding(g, 0, g, dp(8)) }
+            nearby.addView(tvHint, lp())
+        }
+        nearby.addView(nearbyBox, lp())
+        right.addView(nearby, lp())
+        val recent = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+        val actions = LinearLayout(c).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(Ui.quietButton(c, s(R.string.home_clear)) { confirmClear() })
+            addView(Ui.quietButton(c, s(R.string.home_see_all)) { host.openHistory() })
+        }
+        recent.addView(Ui.section(c, s(R.string.home_recent), actions), lp())
+        recent.addView(recentBox, lp())
+        right.addView(recent, lp(top = 16))
+
+        strip = TransferStrip(c) { host.showTransfer() }.apply { visibility = View.GONE }
+
+        val ls = Ui.scrollPage(c, left)
+        right.addView(strip, 0, lp())
+        val rs = Ui.scrollPage(c, right)
+        val cols = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL }
+        cols.addView(ls, LinearLayout.LayoutParams(dp(300 + 2 * Theme.TV_GUTTER), -1))
+        cols.addView(View(c).apply { setBackgroundColor(Theme.LINE) },
+            LinearLayout.LayoutParams(Theme.rule(c), -1).apply { topMargin = dp(Theme.TV_SAFE_V); bottomMargin = dp(Theme.TV_SAFE_V) })
+        cols.addView(rs, LinearLayout.LayoutParams(0, -1, 1f))
+
+        val root = KeyRoot(c) { n -> handleDigit(n) }
+        root.addView(cols, FrameLayout.LayoutParams(-1, -1))
+        leftBox = left; rightBox = right
+        lastLeft = null; lastRight = null
+        root.viewTreeObserver.addOnGlobalFocusChangeListener { _, nf ->
+            when {
+                inside(left, nf) -> lastLeft = nf
+                inside(right, nf) -> lastRight = nf
+            }
+            if (nf != null) linkPanes()
+        }
+        refresh()
+        linkPanes()
+        built = true
+        return root
+    }
+
+    private fun hasNumberKeys() = try {
+        android.view.KeyCharacterMap.deviceHasKey(android.view.KeyEvent.KEYCODE_1)
+    } catch (_: Throwable) { false }
+
+    /** Number keys 1-9 send to that port (remote or keyboard). */
+    private fun handleDigit(n: Int): Boolean {
+        val v = portViews.getOrNull(n - 1) ?: return false
+        v.performClick()
+        return true
+    }
+
     /** Clears the Recent list (history and the in-memory received list). Never deletes files. */
     private fun confirmClear() {
         host.confirm(s(R.string.clear_title), s(R.string.clear_body), s(R.string.home_clear), s(R.string.action_cancel)) { ok ->
@@ -185,7 +339,7 @@ class HomeScreen(host: MainActivity) : Screen(host) {
         })
         Ui.focusFill(v, job, 1.06f, Theme.R_CTRL,
             android.graphics.drawable.GradientDrawable().apply { setColor(fill); cornerRadius = Ui.dpf(c, Theme.R_CTRL) },
-            pressFill = job?.shade ?: Theme.INK_2)
+            pressFill = job?.shade ?: Theme.INK_2, ring = true)
         v.setOnClickListener { Ui.haptic(it); onClick() }
         return v
     }
@@ -404,6 +558,7 @@ class HomeScreen(host: MainActivity) : Screen(host) {
         val focusId = nearbyBox.findFocus()?.tag
         nearbyBox.removeAllViews()
         firstPort = null
+        portViews.clear()
         val g = Ui.gutter(c)
         if (list.isEmpty()) {
             val line = LinearLayout(c).apply {
@@ -449,10 +604,12 @@ class HomeScreen(host: MainActivity) : Screen(host) {
             row.tag = d.id
             row.contentDescription = "${d.name}, ${kindLabel(d.type)}, ${tags.joinToString(", ")}"
             nearbyBox.addView(row, lp())
+            portViews.add(row)
             if (firstPort == null) firstPort = row
             if (seenNearby.add(d.id) && built) Anim.enter(row, (newIdx++ * 45).toLong())
             if (d.id == focusId) row.requestFocus()
         }
+        linkPanes()
     }
 
     // ---------------------------------------------------------------- recent (HistoryStore)

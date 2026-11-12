@@ -93,6 +93,7 @@
     <string name="web_meta_upload_only">Others can still send files to this device from their browser.</string>
     <string name="web_step1">Join this Wi‑Fi</string>
     <string name="web_step1_meta">Scan with the other device\'s camera. Skip if it is already on your Wi‑Fi.</string>
+    <string name="web_step1_meta_tv">Scan to join. Skip if already on your Wi‑Fi.</string>
     <string name="web_step2">Open in the browser</string>
     <string name="web_step2_meta">Scan this, or type the address.</string>
     <string name="web_network">Network</string>

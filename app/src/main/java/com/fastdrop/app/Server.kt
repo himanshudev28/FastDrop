@@ -133,7 +133,7 @@ object Server {
             } else {
                 val offer = IncomingOffer(fromName, fromType, files, if (text != null) 0L else total, text,
                     code = if (v2) ProtoV2.confirmationCode(id) else "", trusted = trusted,
-                    canTrust = canTrust)
+                    canTrust = canTrust, dev = senderDev)
                 shown = offer
                 var noUi = false
                 Hub.offer = offer
