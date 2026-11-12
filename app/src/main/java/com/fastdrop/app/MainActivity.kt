@@ -524,7 +524,7 @@ class MainActivity : Activity(), Hub.Listener {
     /** Text input as a themed bottom sheet (same look as the rest of the app; Enter confirms). */
     fun inputDialog(title: String, initial: String, inputType: Int, onOk: (String) -> Unit) {
         val multiline = inputType and android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE != 0
-        ScreenKit.inputSheet(this, title, "", initial, inputType, getString(android.R.string.ok), multiline, onOk)
+        ScreenKit.inputSheet(this, title, "", initial, inputType, getString(android.R.string.ok), multiline, onOk = onOk)
     }
 
     // ---------------------------------------------------------------- received files
