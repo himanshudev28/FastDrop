@@ -14,12 +14,12 @@ import android.widget.TextView
  */
 class TransferPanel(ctx: Context, onHide: () -> Unit) : LinearLayout(ctx) {
     private val tvMode = Ui.tv(ctx)
-    private val pitch = if (tvMode) 12f else 9f
+    private val pitch = if (tvMode) 8f else 6f
     private fun dp(v: Int) = Theme.dp(context, v)
 
     val title: TextView = Ui.text(ctx, "", Type.TITLE)
     val hide: TextView = Ui.quietButton(ctx, ctx.getString(R.string.action_hide), false, onHide)
-    val readout = DotReadout(ctx, pitch, if (tvMode) 9f else 7f, "8.88")
+    val readout = DotReadout(ctx, pitch, if (tvMode) 6f else 4.6f, "8.88")
     val unit: TextView = Ui.text(ctx, "", Type.ROW)
     val crc: TextView = Ui.tag(ctx, ctx.getString(R.string.tag_crc))
     val meter = SegmentMeter(ctx, if (tvMode) 32 else 24)
@@ -28,7 +28,7 @@ class TransferPanel(ctx: Context, onHide: () -> Unit) : LinearLayout(ctx) {
     val note: TextView = Ui.text(ctx, "", Type.META)
     val body: TextView = Ui.text(ctx, "", Type.BODY)
     val codeLabel: TextView = Ui.text(ctx, "", Type.ROW)
-    val code = DotReadout(ctx, 8f, 6f, "0000")
+    val code = DotReadout(ctx, 5f, 3.8f, "0000")
     val codeHelp: TextView = Ui.text(ctx, "", Type.META)
     val ticks = ScanTicks(ctx)
 
@@ -43,15 +43,8 @@ class TransferPanel(ctx: Context, onHide: () -> Unit) : LinearLayout(ctx) {
     init {
         orientation = VERTICAL
         val g = Ui.gutter(ctx)
-        fun padBase() = setPadding(g, dp(8) + topInset, g, dp(20))
+        fun padBase() = setPadding(g, dp(8), g, dp(20))
         padBase()
-        // The panel reaches the status bar on a full-height sheet: it pads itself by the top inset.
-        setOnApplyWindowInsetsListener { _, ins ->
-            val t = Ui.insetsOf(ins)[1]
-            if (t != topInset) { topInset = t; padBase() }
-            ins
-        }
-
         title.maxLines = 2
         titleRow.orientation = HORIZONTAL
         titleRow.gravity = Gravity.CENTER_VERTICAL

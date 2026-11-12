@@ -15,6 +15,7 @@ import android.text.format.DateUtils
 import android.view.Gravity
 import android.view.View
 import android.view.ViewOutlineProvider
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 
@@ -66,44 +67,73 @@ class HomeScreen(host: MainActivity) : Screen(host) {
 
         val content = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
         content.addView(header(), lp())
-        content.addView(heroBox, lp(top = 4))
+        content.addView(heroBox, lp())
 
         val nearby = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
         val scan = if (QrScanActivity.hasCamera(c)) Ui.quietButton(c, s(R.string.home_scan)) { host.scanQr(true) } else null
         nearby.addView(Ui.section(c, s(R.string.home_nearby), scan), lp())
         nearby.addView(nearbyBox, lp())
 
+        // Quick send: solid category tiles, each opens the picker on its tab.
+        val quick = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+        quick.addView(Ui.section(c, s(R.string.home_quick_send)), lp())
+        val grid = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL; val g = Ui.gutter(c); setPadding(g, 0, g, 0) }
+        class T(val label: Int, val icon: Int, val job: Job?, val go: () -> Unit)
+        val tiles = listOf(
+            T(R.string.tile_apps, R.drawable.ic_apps, Job.OK) { host.openPicker(PickerActivity.TAB_APPS) },
+            T(R.string.tile_photos, R.drawable.ic_photo, Job.WEB) { host.openPicker(PickerActivity.TAB_PHOTOS) },
+            T(R.string.tile_videos, R.drawable.ic_video, Job.RECEIVE) { host.openPicker(PickerActivity.TAB_VIDEOS) },
+            T(R.string.tile_music, R.drawable.ic_music, Job.TEXT) { host.openPicker(PickerActivity.TAB_MUSIC) },
+            T(R.string.tile_files, R.drawable.ic_file, null) { host.openPicker(PickerActivity.TAB_FILES) },
+            T(R.string.tile_text, R.drawable.ic_edit, Job.TEXT) {
+                host.inputDialog(s(R.string.tile_text_title), "", android.text.InputType.TYPE_CLASS_TEXT or
+                    android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE) { host.setSendText(it) }
+            },
+        )
+        val rowL = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL }
+        tiles.forEachIndexed { i, t ->
+            rowL.addView(tile(t.job, t.icon, s(t.label), t.go),
+                LinearLayout.LayoutParams(0, -2, 1f).apply { if (i > 0) marginStart = dp(6) })
+        }
+        grid.addView(rowL, lp())
+        quick.addView(grid, lp())
+
         val other = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
         other.addView(Ui.section(c, s(R.string.home_other_ways)), lp())
         if (QrScanActivity.hasCamera(c)) {
-            other.addView(Ui.row(c, R.drawable.ic_scan, s(R.string.home_scan_code), null, Ui.chevron(c)) { host.scanQr(true) }, lp())
+            val ink = Theme.plateFor("files")
+            other.addView(Ui.row(c, null, s(R.string.home_scan_code), s(R.string.home_scan_code_sub), Ui.chevron(c),
+                lead = Ui.plate(c, R.drawable.ic_scan, ink.fill, ink.on, 40)) { host.scanQr(true) }, lp())
         }
         val web = Theme.plateFor("browser")
-        other.addView(Ui.row(c, null, s(R.string.home_share_any), s(R.string.home_share_any_sub), Ui.chevron(c),
+        other.addView(Ui.row(c, null, s(R.string.home_share_any), s(R.string.home_share_any_sub), Ui.chevron(c, Job.WEB),
             lead = Ui.plate(c, R.drawable.ic_globe, web.fill, web.on, 40, Job.WEB), job = Job.WEB) { host.showWebShare(false) }, lp())
 
         val recent = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
-        recent.addView(Ui.section(c, s(R.string.home_recent)), lp())
+        val actions = LinearLayout(c).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(Ui.quietButton(c, s(R.string.home_clear)) { confirmClear() })
+            addView(Ui.quietButton(c, s(R.string.home_see_all)) { host.openHistory() })
+        }
+        recent.addView(Ui.section(c, s(R.string.home_recent), actions), lp())
         recent.addView(recentBox, lp())
 
         if (wide) {
             val cols = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL }
             val left = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
             val right = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
-            left.addView(nearby, lp(top = 24)); left.addView(other, lp(top = 24))
-            right.addView(recent, lp(top = 24))
+            left.addView(quick, lp(top = 8)); left.addView(other, lp(top = 24))
+            right.addView(nearby, lp(top = 8)); right.addView(recent, lp(top = 24))
             cols.addView(left, lp(0, -2, 1f)); cols.addView(right, lp(0, -2, 1f))
             content.addView(cols, lp())
         } else {
+            content.addView(quick, lp())
             content.addView(nearby, lp(top = 24))
             content.addView(other, lp(top = 24))
             content.addView(recent, lp(top = 24))
         }
 
         val page = Ui.scrollPage(c, content)
-        // applyInsets on the scroll page pads the bottom by the nav bar; the dock does that itself.
-        page.setPadding(page.paddingLeft, page.paddingTop, page.paddingRight, 0)
-        Ui.applyInsets(page, true, false)
 
         strip = TransferStrip(c) { host.showTransfer() }.apply { visibility = View.GONE }
 
@@ -118,9 +148,44 @@ class HomeScreen(host: MainActivity) : Screen(host) {
         root.addView(page, LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(strip, LinearLayout.LayoutParams(-1, -2))
         root.addView(dock, LinearLayout.LayoutParams(-1, -2))
+        page.setPadding(page.paddingLeft, page.paddingTop, page.paddingRight, 0)
+        Ui.applyInsets(page, true, false)
         refresh()
         built = true
         return root
+    }
+
+    /** Clears the Recent list (history and the in-memory received list). Never deletes files. */
+    private fun confirmClear() {
+        host.confirm(s(R.string.clear_title), s(R.string.clear_body), s(R.string.home_clear), s(R.string.action_cancel)) { ok ->
+            if (ok) {
+                HistoryStore.clear()
+                Hub.received.clear()
+                Hub.changed()
+            }
+        }
+    }
+
+    /** A Quick send tile: solid category colour (INK for Files), icon on top, label below. */
+    private fun tile(job: Job?, icon: Int, label: String, onClick: () -> Unit): View {
+        val c = ctx
+        val fill = job?.fill ?: Theme.INK
+        val on = job?.on ?: Theme.BG
+        val v = LinearLayout(c).apply {
+            orientation = LinearLayout.VERTICAL
+            minimumHeight = dp(68)
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(2), dp(10), dp(2), dp(8))
+        }
+        v.addView(Ui.icon(c, icon, on, 24), LinearLayout.LayoutParams(dp(24), dp(24)))
+        v.addView(Ui.text(c, label, 12f, on, Theme.MEDIUM, 16f).apply {
+            maxLines = 1; gravity = Gravity.CENTER; setPadding(0, dp(6), 0, 0)
+        })
+        Ui.focusFill(v, job, 1.06f, Theme.R_CTRL,
+            android.graphics.drawable.GradientDrawable().apply { setColor(fill); cornerRadius = Ui.dpf(c, Theme.R_CTRL) },
+            pressFill = job?.shade ?: Theme.INK_2)
+        v.setOnClickListener { Ui.haptic(it); onClick() }
+        return v
     }
 
     private fun header(): View {
@@ -265,20 +330,15 @@ class HomeScreen(host: MainActivity) : Screen(host) {
 
         heroBox.removeAllViews()
         val g = Ui.gutter(c)
-        val name = Ui.text(c, Hub.myName, Type.HERO).apply {
-            maxLines = 2; ellipsize = TextUtils.TruncateAt.END
-            setPadding(g, dp(8), g, dp(4))
-            isFocusable = true
-            setOnClickListener { Ui.haptic(it); host.showSettings() }
-            Ui.focusFill(this, null, 1.02f, 0f, null)
-            setTextColor(Ui.states(Theme.INK, Theme.BG, Ui.tv(c)))
-        }
-        heroBox.addView(name, lp())
-
+        // One compact status line: LED, device name and network. The LED carries the state.
         val line = LinearLayout(c).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(g, dp(4), g, 0)
+            minimumHeight = dp(40)
+            setPadding(g, dp(4), g, dp(4))
+            isFocusable = true
+            setOnClickListener { Ui.haptic(it); host.showSettings() }
+            Ui.focusFill(this, null, 1.02f, 0f, null)
         }
         val led: Led
         val label: View
@@ -293,19 +353,22 @@ class HomeScreen(host: MainActivity) : Screen(host) {
             }
             !on -> {
                 led = Led.OFF
-                label = Ui.text(c, s(if (!wifi) R.string.home_wifi_off else R.string.home_no_network), Type.META)
+                label = Ui.text(c, "${Hub.myName} · " + s(if (!wifi) R.string.home_wifi_off else R.string.home_no_network), Type.BODY)
             }
             else -> {
                 led = Led.OK
                 label = LinearLayout(c).apply {
                     orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                    addView(Ui.text(c, "$net · ", Type.META))
-                    addView(Ui.mono(c, ip))
+                    addView(Ui.text(c, "${Hub.myName} · $net ", Type.BODY).apply {
+                        maxLines = 1; ellipsize = TextUtils.TruncateAt.END
+                    }, LinearLayout.LayoutParams(-2, -2, 0f))
+                    addView(Ui.mono(c, ip), LinearLayout.LayoutParams(-2, -2))
                 }
             }
         }
-        line.addView(Ui.led(c, led), LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginEnd = dp(8) })
+        line.addView(Ui.led(c, led), LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginEnd = dp(10) })
         line.addView(label, LinearLayout.LayoutParams(-2, -2))
+        line.contentDescription = "${Hub.myName}. ${net} $ip"
         heroBox.addView(line, lp())
         if (err == null) {
             val summary = when (Hub.autoMode) {
@@ -313,8 +376,8 @@ class HomeScreen(host: MainActivity) : Screen(host) {
                 Hub.AUTO_ASK -> R.string.home_accept_ask
                 else -> R.string.home_accept_trusted
             }
-            heroBox.addView(Ui.text(c, s(summary), Type.META).apply { setPadding(g, dp(2), g, dp(16)) }, lp())
-        } else heroBox.addView(Ui.spacer(c, 16))
+            heroBox.addView(Ui.text(c, s(summary), Type.META).apply { setPadding(g + dp(18), 0, g, dp(12)) }, lp())
+        } else heroBox.addView(Ui.spacer(c, 12))
     }
 
     // ---------------------------------------------------------------- nearby ports
@@ -455,20 +518,15 @@ class HomeScreen(host: MainActivity) : Screen(host) {
             val lead = Ui.plate(c, R.drawable.ic_alert, Theme.C_DANGER, Theme.ON_LIGHT, 40)
             return Ui.row(c, null, titleOf(e), s(R.string.recent_failed, ago(e.at)), null, lead = lead)
         }
-        // sent
-        if (e.outgoing) {
-            val p = Theme.plateFor("files")
-            val lead = Ui.plate(c, R.drawable.ic_send, Theme.C_SEND, Theme.ON_DARK, 40)
-            return Ui.row(c, null, titleOf(e), s(R.string.recent_to, "$sizeText · ${ago(e.at)}", e.peer), null, lead = lead)
-        }
         // received file, group or APK
-        val meta = s(R.string.recent_from, "$sizeText · ${ago(e.at)}", e.peer)
+        val meta = if (e.outgoing) s(R.string.recent_to, "$sizeText · ${ago(e.at)}", e.peer)
+        else s(R.string.recent_from, "$sizeText · ${ago(e.at)}", e.peer)
         val iv = thumb()
         if (file?.appPkg != null) Thumbs.app(iv, file.appPkg) else if (file != null) Thumbs.file(iv, file.name, file.uri?.let { Uri.parse(it) }, dp(96))
-        val open = { openEntry(e) }
+        val open = { if (e.outgoing) Unit else openEntry(e) }
         val trailing = if (file?.isApp == true)
             Ui.secondaryButton(c, s(R.string.action_install), null, true) { open() } else null
-        return Ui.row(c, null, titleOf(e), meta, trailing, lead = iv, onClick = open)
+        return Ui.row(c, null, titleOf(e), meta, trailing, lead = iv, onClick = if (e.outgoing) null else open)
     }
 
     private fun titleOf(e: HistoryEntry): String {

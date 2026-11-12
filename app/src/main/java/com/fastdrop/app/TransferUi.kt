@@ -85,7 +85,7 @@ class TransferUi(private val host: MainActivity) {
         val p = Panel()
         panel = p
         var self: Sheets.Handle? = null
-        val h = Sheets.show(host.root, p.frame, true, padded = false, full = true, dragArea = p.panel) {
+        val h = Sheets.show(host.root, p.frame, true, padded = false, full = false, dragArea = p.panel) {
             if (handle === self) {
                 handle = null; panel = null
                 markDismissed(shownKey)
@@ -140,6 +140,11 @@ class TransferUi(private val host: MainActivity) {
             visibility = View.GONE
         }
         private val listBox = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        private val extras = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            val g = Ui.gutter(ctx)
+            setPadding(g - dp(4), dp(4), g - dp(4), 0)
+        }
         private val actions = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             val g = Ui.gutter(ctx)
@@ -186,6 +191,7 @@ class TransferUi(private val host: MainActivity) {
             }
             frame.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
             frame.addView(Ui.rule(ctx))
+            frame.addView(extras, LinearLayout.LayoutParams(-1, -2))
             frame.addView(actions, LinearLayout.LayoutParams(-1, -2))
         }
 
@@ -403,16 +409,24 @@ class TransferUi(private val host: MainActivity) {
             if (list.isEmpty()) return
             val sizes = HashMap<String, Long>()
             for (s in Hub.selection) sizes[s.name] = s.size
-            val shown = list.take(6)
+            val shown = list.take(5)
             val g = Ui.gutter(ctx)
             shown.forEach { n ->
                 val row = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    minimumHeight = dp(40)
-                    setPadding(g, dp(6), g, dp(6))
+                    minimumHeight = dp(52)
+                    setPadding(g, dp(8), g, dp(8))
                 }
-                row.addView(Ui.text(ctx, n.substringAfterLast('/'), Type.META, Theme.INK).apply {
+                val e = n.substringAfterLast('.', "").lowercase()
+                val kind = when (Thumbs.iconFor(n)) {
+                    R.drawable.ic_photo -> "photos"; R.drawable.ic_video -> "videos"
+                    R.drawable.ic_music -> "music"; R.drawable.ic_apps -> "apps"; else -> "files"
+                }
+                val p = Theme.plateFor(kind)
+                row.addView(Ui.plate(ctx, Thumbs.iconFor(n), p.fill, p.on, 36),
+                    LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(12) })
+                row.addView(Ui.text(ctx, n.substringAfterLast('/'), Type.ROW, Theme.INK).apply {
                     maxLines = 1; ellipsize = TextUtils.TruncateAt.MIDDLE
                 }, LinearLayout.LayoutParams(0, -2, 1f))
                 sizes[n]?.let {
@@ -428,6 +442,38 @@ class TransferUi(private val host: MainActivity) {
             }
         }
 
+        private fun shareReceived(r: Received) {
+            val uri = r.uri ?: return
+            try {
+                val i = android.content.Intent(android.content.Intent.ACTION_SEND).setType(Storage.mime(r.name))
+                    .putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                    .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                host.startActivity(android.content.Intent.createChooser(i, null))
+            } catch (_: Exception) { host.toast(str(R.string.err_cant_share), 2) }
+        }
+
+        private fun showInFolder() {
+            try { host.startActivity(android.content.Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            catch (_: Exception) { host.toast(str(R.string.err_cant_share), 2) }
+        }
+
+        /** Send the received file straight back to the device it came from. */
+        private fun sendBack(t: Transfer, r: Received) {
+            val uri = r.uri ?: return
+            val app = ctx.applicationContext
+            kotlin.concurrent.thread(name = "send-back") {
+                val item = try { Storage.itemFromUri(app, uri) } catch (_: Exception) { null }
+                Hub.main.post {
+                    val dev = Hub.devices.values.firstOrNull { it.name == t.peer }
+                    if (item == null || dev == null) { host.toast(str(R.string.err_cant_share), 2); return@post }
+                    finishWith(t)
+                    Hub.selection = listOf(item)
+                    host.sendTo(dev)
+                }
+            }
+        }
+
         /** For incoming transfers: which saved files can be opened or installed. */
         private fun findReceived(t: Transfer) {
             val wallStart = System.currentTimeMillis() - (SystemClock.elapsedRealtime() - t.startedAt) - 3000
@@ -439,6 +485,8 @@ class TransferUi(private val host: MainActivity) {
 
         private fun buildActions(m: Mode, t: Transfer?) {
             actions.removeAllViews()
+            extras.removeAllViews()
+            extras.visibility = View.GONE
             fun add(v: View, first: Boolean) {
                 actions.addView(v, LinearLayout.LayoutParams(0, -2, 1f).apply { if (!first) marginStart = dp(12) })
             }
@@ -462,6 +510,22 @@ class TransferUi(private val host: MainActivity) {
                     } else if (oi != null) {
                         val b = Ui.jobButton(ctx, str(R.string.action_open), Job.OK, null) { host.openReceived(oi) }
                         add(b, first); first = false; focus = b
+                    }
+                    // Quick follow-ups for what was just received: Share, Show in folder, Send back.
+                    if (t != null && !t.outgoing && t.text == null) {
+                        val item = oi ?: ig?.firstOrNull()
+                        fun q(label: String, go: () -> Unit) =
+                            extras.addView(Ui.quietButton(ctx, label) { go() }, LinearLayout.LayoutParams(0, -2, 1f))
+                        if (item?.uri != null) q(str(R.string.action_share)) { shareReceived(item) }
+                        q(str(R.string.action_show_folder)) { showInFolder() }
+                        if (item?.uri != null) q(str(R.string.action_send_back)) { sendBack(t, item) }
+                        extras.visibility = View.VISIBLE
+                    }
+                    if (t != null && t.outgoing && first) {
+                        add(Ui.secondaryButton(ctx, str(R.string.action_send_more)) {
+                            finishWith(t); host.openPicker(PickerActivity.TAB_PHOTOS)
+                        }, true)
+                        first = false
                     }
                     val done = Ui.secondaryButton(ctx, str(R.string.action_done)) { finishWith(t) }
                     add(done, first)
@@ -603,7 +667,7 @@ class TransferUi(private val host: MainActivity) {
             val codeRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             codeRow.addView(Ui.text(ctx, str(R.string.code_label), Type.ROW, job.on),
                 LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(16) })
-            val code = DotReadout(ctx, 8f, 6f, "0000").apply {
+            val code = DotReadout(ctx, 5f, 3.8f, "0000").apply {
                 // On the pink text panel the readout uses the ink dots; on ultramarine it is white on its shade.
                 setJob(job)
                 setText(offer.code)

@@ -397,7 +397,7 @@ object Ui {
                 setPadding(g, 0, if (trailing != null) dp(ctx, 4) else g, 0)
                 minimumHeight = dp(ctx, if (trailing != null) 48 else 0)
             }
-            val l = text(ctx, label, Type.SECTION)
+            val l = text(ctx, label, if (tv(ctx)) 20f else 17f, Theme.INK, Theme.MEDIUM, if (tv(ctx)) 26f else 22f)
             l.setPadding(0, dp(ctx, if (tv(ctx)) 16 else 12), 0, dp(ctx, 8))
             bar.addView(l, LinearLayout.LayoutParams(0, WRAP, 1f))
             if (trailing != null) bar.addView(trailing, LinearLayout.LayoutParams(WRAP, WRAP))
