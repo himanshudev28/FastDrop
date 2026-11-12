@@ -14,6 +14,8 @@ No internet. No accounts. No cloud. Just open it on both devices and tap.
 [![Release](https://img.shields.io/github/v/release/himanshudev28/FastDrop?logo=github)](https://github.com/himanshudev28/FastDrop/releases/latest)
 [![Build](https://github.com/himanshudev28/FastDrop/actions/workflows/release.yml/badge.svg)](https://github.com/himanshudev28/FastDrop/actions/workflows/release.yml)
 
+<img src="docs/screenshot.png" alt="FastDrop home screen on a Galaxy S21 FE" width="300">
+
 </div>
 
 ---
