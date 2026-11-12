@@ -67,6 +67,14 @@ object HistoryCodec {
         return list.sortedByDescending { it.at }.filter { seen.add(it.id) }.take(max)
     }
 
+    const val KEEP_FOREVER = 0
+    const val KEEP_DEFAULT_DAYS = 30
+    private const val DAY_MS = 24L * 60 * 60 * 1000
+
+    /** Entries newer than [maxAgeDays] days; 0 (or less) keeps everything. Pure: never touches files. */
+    fun pruned(list: List<HistoryEntry>, maxAgeDays: Int, now: Long): List<HistoryEntry> =
+        if (maxAgeDays <= 0) list else list.filter { now - it.at <= maxAgeDays * DAY_MS }
+
     private fun toJson(e: HistoryEntry): JSONObject {
         val o = JSONObject().put("id", e.id).put("out", e.outgoing).put("peer", e.peer)
             .put("n", e.count).put("total", e.total).put("speed", e.avgSpeed).put("dur", e.durationMs)

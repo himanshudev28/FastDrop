@@ -69,4 +69,13 @@ class IntegrationsModelTest {
         assertEquals("Receiving 7 %", WidgetStatus.text(true, false, 7, false))
         assertEquals("Sending…", WidgetStatus.text(true, true, -1, false))
     }
+
+    @Test fun pruneByAge() {
+        val day = 24L * 60 * 60 * 1000
+        val now = 100 * day
+        val l = listOf(entry("new", now - day), entry("mid", now - 10 * day), entry("old", now - 40 * day))
+        assertEquals(listOf("new"), HistoryCodec.pruned(l, 7, now).map { it.id })
+        assertEquals(listOf("new", "mid"), HistoryCodec.pruned(l, 30, now).map { it.id })
+        assertEquals(3, HistoryCodec.pruned(l, HistoryCodec.KEEP_FOREVER, now).size)
+    }
 }

@@ -37,6 +37,12 @@ object HistoryStore {
                 if (f.isFile) HistoryCodec.capped(HistoryCodec.decode(f.readText(Charsets.UTF_8))) else emptyList()
             } catch (_: Exception) { emptyList() }
         }
+        // Drop entries older than the "Keep history" setting before Hub.received is refilled from the list.
+        val kept = HistoryCodec.pruned(all(), keepDays(ctx), System.currentTimeMillis())
+        if (kept.size != all().size) {
+            synchronized(lock) { list = kept }
+            write(ctx.applicationContext, kept)
+        }
         val restored = ArrayList<Received>()
         for (e in all()) {
             if (e.outgoing) continue
@@ -58,6 +64,40 @@ object HistoryStore {
         Hub.changed()
     }
 
+    // ---------------------------------------------------------------- retention ("Keep history")
+
+    private const val KEY_KEEP = "history_keep_days"
+
+    /** Settings > Keep history: 7, 30 (default) or 0 = forever. */
+    fun keepDays(ctx: Context = Hub.app): Int = try {
+        ctx.getSharedPreferences("fastdrop", Context.MODE_PRIVATE).getInt(KEY_KEEP, HistoryCodec.KEEP_DEFAULT_DAYS)
+    } catch (_: Throwable) { HistoryCodec.KEEP_DEFAULT_DAYS }
+
+    fun setKeepDays(days: Int) {
+        Hub.app.getSharedPreferences("fastdrop", Context.MODE_PRIVATE).edit().putInt(KEY_KEEP, days.coerceAtLeast(0)).apply()
+        prune(days)
+    }
+
+    /**
+     * Removes history entries older than [maxAgeDays] days (0 = keep forever) and the matching items
+     * from Hub.received. Never deletes any file from storage.
+     */
+    fun prune(maxAgeDays: Int) {
+        val now = System.currentTimeMillis()
+        val dropped = all().filter { it !in HistoryCodec.pruned(all(), maxAgeDays, now) }
+        if (dropped.isEmpty()) return
+        val ids = dropped.map { it.id }.toHashSet()
+        mutate { l -> l.filter { it.id !in ids } }
+        val uris = dropped.flatMap { e -> e.files.mapNotNull { it.uri } }.toHashSet()
+        val texts = dropped.filter { it.text != null }.map { it.at to it.text }.toHashSet()
+        Hub.main.post {
+            Hub.received.removeAll { r ->
+                (r.uri != null && r.uri.toString() in uris) || (r.text != null && (r.at to r.text) in texts)
+            }
+            Hub.changed()
+        }
+    }
+
     fun textPreview(text: String) =
         text.trim().lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(60) ?: "Text"
 
@@ -74,17 +114,21 @@ object HistoryStore {
 
     private fun add(e: HistoryEntry) = mutate { l -> HistoryCodec.capped(listOf(e) + l) }
 
-    private fun mutate(f: (List<HistoryEntry>) -> List<HistoryEntry>) {
-        val snapshot: List<HistoryEntry>
-        synchronized(lock) { list = f(list); snapshot = list }
+    private fun write(ctx: Context, snapshot: List<HistoryEntry>) {
         io.execute {
             try {
-                val dst = file(Hub.app)
+                val dst = file(ctx)
                 val tmp = File(dst.parentFile, dst.name + ".tmp")
                 tmp.writeText(HistoryCodec.encode(snapshot), Charsets.UTF_8)
                 if (!tmp.renameTo(dst)) { dst.delete(); tmp.renameTo(dst) }
             } catch (_: Exception) { }
         }
+    }
+
+    private fun mutate(f: (List<HistoryEntry>) -> List<HistoryEntry>) {
+        val snapshot: List<HistoryEntry>
+        synchronized(lock) { list = f(list); snapshot = list }
+        write(Hub.app, snapshot)
         for (l in listeners) try { l() } catch (_: Exception) { }
         Hub.changed()
     }
