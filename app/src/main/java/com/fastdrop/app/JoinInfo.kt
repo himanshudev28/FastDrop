@@ -83,7 +83,7 @@ class JoinInfo(
                 if (!SCHEME.equals(u.scheme, ignoreCase = true) || !"join".equals(u.host, ignoreCase = true)) return null
                 val id = u.getQueryParameter("i")?.trim()?.take(64)?.takeIf { it.isNotEmpty() } ?: return null
                 val name = (u.getQueryParameter("n") ?: "Device").trim().take(40).ifEmpty { "Device" }
-                val type = if (u.getQueryParameter("t") == "tv") "tv" else "phone"
+                val type = when (u.getQueryParameter("t")) { "tv" -> "tv"; "laptop" -> "laptop"; else -> "phone" }
                 val port = u.getQueryParameter("p")?.toIntOrNull()?.takeIf { it in 1..65535 } ?: Proto.PORT
                 val lan = u.getQueryParameter("l")?.split(',')?.map { it.trim() }?.filter { isIpv4(it) }?.take(8) ?: emptyList()
                 val mode = u.getQueryParameter("m")?.takeIf { it == MODE_P2P || it == MODE_HOTSPOT }
