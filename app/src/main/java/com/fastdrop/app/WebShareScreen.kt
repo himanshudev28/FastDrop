@@ -1,17 +1,21 @@
 package com.fastdrop.app
 
 import android.graphics.drawable.GradientDrawable
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
-import android.widget.FrameLayout
+import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
 import java.util.concurrent.Executors
 
 /**
- * "Share with any device": runs the built-in web server so an iPhone, a PC or a phone without
- * FastDrop can download the selected files (and the FastDrop app itself) and upload files back.
- * Step 1 joins our Wi-Fi (only when we host one), step 2 opens the page.
+ * "Share with any device" (docs/DESIGN.md 4.10 and 5.5): runs the built-in web server so an iPhone,
+ * a PC or a phone without FastDrop can download the selected files (and the FastDrop app itself)
+ * and upload files back. The web identity is yellow, used as a plate and as the one filled button.
+ * Step 1 joins our Wi-Fi (only when we host one), step 2 opens the page. Live counters and the
+ * connected browsers follow, then Stop. On TV: status, counters and Stop on the left, the two QR
+ * plates side by side on the right.
  */
 class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Screen(host) {
     private companion object {
@@ -20,7 +24,6 @@ class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Scre
     }
 
     private var shown = false
-    private var entered = false
     private var starting = false
     private var failed = false
     private var lastWifiQr: String? = null
@@ -29,10 +32,9 @@ class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Scre
     private var lastDl = 0L
     private var lastUl = 0L
     private var lastUrlsSig = ""
+    private var lastStatusSig = ""
 
-    private lateinit var introTitle: TextView
-    private lateinit var introSub: TextView
-    private lateinit var errorCard: View
+    private lateinit var statusBox: LinearLayout
     private lateinit var step1: View
     private lateinit var step2: View
     private lateinit var wifiQrView: QrView
@@ -47,159 +49,174 @@ class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Scre
     private lateinit var outNum: TextView
     private lateinit var inNum: TextView
     private lateinit var events: LinearLayout
-    private var sections: List<View> = emptyList()
+    private lateinit var stopHeader: View
 
     private val stopCheck = Runnable { if (host.current !== this) stopAll() }
 
-    private fun lp(w: Int = ScreenKit.MATCH, h: Int = ScreenKit.WRAP, bottomDp: Int = 14, weight: Float = 0f) =
-        ScreenKit.lp(ctx, w, h, bottomDp, weight)
+    private fun dp(v: Int) = Theme.dp(ctx, v)
+    private fun s(id: Int, vararg a: Any): String = ctx.getString(id, *a)
+    private fun lp(top: Int = 0, w: Int = -1, h: Int = -2, weight: Float = 0f) =
+        LinearLayout.LayoutParams(w, h, weight).apply { topMargin = dp(top) }
 
     override val wantsTick: Boolean get() = true
 
     override fun build(): View {
-        entered = false; lastWifiQr = null; lastUrlQr = null; lastEventSig = ""; lastDl = 0; lastUl = 0; lastUrlsSig = ""
-        val wide = Ui.wide(ctx)
-        val root = FrameLayout(ctx)
-        root.setBackgroundColor(Theme.BG)
+        lastWifiQr = null; lastUrlQr = null; lastEventSig = ""; lastDl = -1; lastUl = -1; lastUrlsSig = ""; lastStatusSig = ""
+        val c = ctx
+        val wide = Ui.wide(c)
 
-        val content = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-        content.addView(Ui.header(ctx, "Share with any device", { stopAndLeave() }), lp(bottomDp = 6))
+        statusBox = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+        step1 = buildStep1(wide)
+        step2 = buildStep2(wide)
+        val live = buildLive()
 
-        val intro = buildIntro()
-        errorCard = buildError()
-        step1 = buildStep1()
-        step2 = buildStep2()
-        val stats = buildStats()
-        val stop = Ui.secondaryButton(ctx, "Stop sharing", R.drawable.ic_close) { stopAndLeave() }
+        stopHeader = Ui.quietButton(c, s(R.string.web_stop), danger = true) { stopAndLeave() }
+        val content = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(Ui.header(c, s(R.string.web_title), { stopAndLeave() }, stopHeader), lp())
 
         if (wide) {
-            val cols = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
-            val gap = ScreenKit.dp(ctx, 24)
-            val left = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-            val right = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-            left.addView(intro, lp()); left.addView(errorCard, lp()); left.addView(step1, lp()); left.addView(step2, lp())
-            right.addView(stats, lp()); right.addView(stop, lp(bottomDp = 0))
-            cols.addView(left, LinearLayout.LayoutParams(0, ScreenKit.WRAP, 1f).apply { marginEnd = gap / 2 })
-            cols.addView(right, LinearLayout.LayoutParams(0, ScreenKit.WRAP, 1f).apply { marginStart = gap / 2 })
+            val cols = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL }
+            val left = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+            val right = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+            left.addView(statusBox, lp())
+            left.addView(live, lp(top = 8))
+            val g = Ui.gutter(c)
+            left.addView(Ui.secondaryButton(c, s(R.string.web_stop_sharing), R.drawable.ic_close) { stopAndLeave() },
+                lp(top = 16).apply { leftMargin = g; rightMargin = g })
+            val qrs = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL }
+            qrs.addView(step1, lp(w = 0, h = -2, weight = 1f))
+            qrs.addView(step2, lp(w = 0, h = -2, weight = 1f))
+            right.addView(qrs, lp())
+            cols.addView(left, lp(w = 0, weight = 1f))
+            cols.addView(right, lp(w = 0, weight = 1.3f))
             content.addView(cols, lp())
-            sections = listOf(intro, step1, step2, stats)
         } else {
-            content.addView(intro, lp()); content.addView(errorCard, lp())
-            content.addView(step1, lp()); content.addView(step2, lp())
-            content.addView(stats, lp()); content.addView(stop, lp())
-            sections = listOf(intro, step1, step2, stats, stop)
+            content.addView(statusBox, lp())
+            content.addView(step1, lp())
+            content.addView(step2, lp())
+            content.addView(live, lp())
         }
-        root.addView(Ui.scrollPage(ctx, content, gutter = true), FrameLayout.LayoutParams(-1, -1))
+        val root = Ui.scrollPage(c, content)
         refresh()
         return root
     }
 
     // ---------------------------------------------------------------- pieces
 
-    private fun buildIntro(): View {
-        val card = Ui.column(ctx)
-        introTitle = Ui.text(ctx, "Starting…", 18f, Theme.TEXT, Theme.BOLD)
-        introSub = Ui.text(ctx, "", 13f, Theme.MUTED).apply { setPadding(0, ScreenKit.dp(ctx, 4), 0, 0) }
-        card.addView(introTitle); card.addView(introSub)
-        return card
-    }
-
-    private fun buildError(): View {
-        val card = Ui.column(ctx)
-        card.addView(Ui.text(ctx, "Couldn't start sharing", 17f, Theme.DANGER, Theme.BOLD))
-        card.addView(Ui.text(ctx, "Port ${WebShare.PORT} is busy. Close other sharing apps and try again.", 13f, Theme.MUTED)
-            .apply { setPadding(0, ScreenKit.dp(ctx, 4), 0, ScreenKit.dp(ctx, 12)) })
-        card.addView(Ui.jobButton(ctx, "Try again", Job.WEB, R.drawable.ic_refresh) { startWeb() })
-        card.visibility = View.GONE
-        return card
-    }
-
-    private fun badge(n: Int): View = TextView(ctx).apply {
+    private fun numberPlate(n: Int): View = TextView(ctx).apply {
         text = n.toString()
-        textSize = 14f
-        typeface = Theme.BOLD
-        setTextColor(Theme.ON_DARK)
+        textSize = 13f
+        typeface = Theme.MONO
+        setTextColor(Job.WEB.on)
         gravity = Gravity.CENTER
         includeFontPadding = false
-        background = GradientDrawable().apply { setColor(Theme.C_WEB); cornerRadius = Theme.dp(ctx, 6).toFloat() }
+        background = GradientDrawable().apply { setColor(Job.WEB.fill); cornerRadius = dp(Theme.R_CTRL.toInt()).toFloat() }
     }
 
     private fun stepHeader(n: Int, title: String, sub: String): View {
-        val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val s = ScreenKit.dp(ctx, 30)
-        row.addView(badge(n), LinearLayout.LayoutParams(s, s).apply { marginEnd = ScreenKit.dp(ctx, 12) })
+        val g = Ui.gutter(ctx)
+        val row = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(g, dp(4), g, dp(8))
+        }
+        row.addView(numberPlate(n), LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(12) })
         val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-        col.addView(Ui.text(ctx, title, 17f, Theme.TEXT, Theme.BOLD))
-        col.addView(Ui.text(ctx, sub, 13f, Theme.MUTED))
-        row.addView(col, LinearLayout.LayoutParams(0, ScreenKit.WRAP, 1f))
+        col.addView(Ui.text(ctx, title, Type.TITLE))
+        col.addView(Ui.text(ctx, sub, Type.META).apply { setPadding(0, dp(2), 0, 0) })
+        row.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
         return row
     }
 
     private fun qrBox(card: LinearLayout): QrView {
         val q = QrView(ctx)
-        val size = ScreenKit.dp(ctx, 220)
+        val size = dp(if (Ui.tv(ctx)) 200 else 200)
         card.addView(q, LinearLayout.LayoutParams(size, size).apply {
             gravity = Gravity.CENTER_HORIZONTAL
-            topMargin = ScreenKit.dp(ctx, 16); bottomMargin = ScreenKit.dp(ctx, 8)
+            topMargin = dp(8); bottomMargin = dp(8)
         })
         return q
     }
 
-    private fun buildStep1(): View {
-        val card = Ui.column(ctx)
-        card.addView(stepHeader(1, "Join this Wi‑Fi", "Scan with the other device's camera. Skip if it is already on your Wi‑Fi."))
+    private fun buildStep1(wide: Boolean): View {
+        val card = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        card.addView(Ui.rule(ctx))
+        card.addView(stepHeader(1, s(R.string.web_step1), s(R.string.web_step1_meta)))
         wifiQrView = qrBox(card)
-        val copySsid = Ui.iconButton(ctx, R.drawable.ic_copy, "Copy network name") {
-            Links.hostInfo().ssid?.let { host.copyText("Network", it) }
+        val copySsid = Ui.iconButton(ctx, R.drawable.ic_copy, s(R.string.cd_copy_network)) {
+            Links.hostInfo().ssid?.let { host.copyText(s(R.string.web_network), it) }
         }
-        ssidRow = Ui.row(ctx, R.drawable.ic_wifi_direct, "Network", " ", copySsid, null)
-        val copyPass = Ui.iconButton(ctx, R.drawable.ic_copy, "Copy password") {
-            Links.hostInfo().pass?.let { host.copyText("Password", it) }
+        ssidRow = Ui.row(ctx, R.drawable.ic_wifi_direct, s(R.string.web_network), " ", copySsid)
+        val copyPass = Ui.iconButton(ctx, R.drawable.ic_copy, s(R.string.cd_copy_password)) {
+            Links.hostInfo().pass?.let { host.copyText(s(R.string.web_password), it) }
         }
-        passRow = Ui.row(ctx, R.drawable.ic_shield, "Password", " ", copyPass, null)
-        card.addView(ssidRow, LinearLayout.LayoutParams(ScreenKit.MATCH, ScreenKit.WRAP))
-        card.addView(passRow, LinearLayout.LayoutParams(ScreenKit.MATCH, ScreenKit.WRAP))
+        passRow = Ui.row(ctx, R.drawable.ic_shield, s(R.string.web_password), " ", copyPass)
+        for (r in listOf(ssidRow, passRow)) {
+            ScreenKit.subtitleOf(r)?.typeface = Theme.MONO
+            card.addView(r, lp())
+        }
         card.visibility = View.GONE
         return card
     }
 
-    private fun buildStep2(): View {
-        val card = Ui.column(ctx)
-        card.addView(stepHeader(2, "Open in browser", "Scan this, or type the address."))
+    private fun buildStep2(wide: Boolean): View {
+        val g = Ui.gutter(ctx)
+        val card = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        card.addView(Ui.rule(ctx))
+        card.addView(stepHeader(2, s(R.string.web_step2), s(R.string.web_step2_meta)))
         urlQrView = qrBox(card)
-        urlText = Ui.text(ctx, "Starting…", 16f, Theme.TEXT, Theme.BOLD).apply {
+        urlText = Ui.text(ctx, s(R.string.web_starting), Type.ROW).apply {
+            typeface = Theme.MONO
             gravity = Gravity.CENTER
             setTextIsSelectable(true)
         }
-        card.addView(urlText, lp(bottomDp = 4))
-        moreUrls = Ui.text(ctx, "", 12f, Theme.MUTED).apply { gravity = Gravity.CENTER; visibility = View.GONE }
-        card.addView(moreUrls, lp(bottomDp = 10))
-        copyBtn = Ui.secondaryButton(ctx, "Copy link", R.drawable.ic_copy) {
-            WebShare.url()?.let { host.copyText("Link", it) }
+        card.addView(urlText, lp(top = 4).apply { leftMargin = g; rightMargin = g })
+        moreUrls = Ui.mono(ctx, "").apply { gravity = Gravity.CENTER; visibility = View.GONE }
+        card.addView(moreUrls, lp(top = 4).apply { leftMargin = g; rightMargin = g })
+        copyBtn = Ui.jobButton(ctx, s(R.string.web_copy_link), Job.WEB, R.drawable.ic_copy) {
+            WebShare.url()?.let { host.copyText(s(R.string.web_link), it) }
         }
-        card.addView(copyBtn, lp(bottomDp = 0))
+        card.addView(copyBtn, lp(top = 12).apply { leftMargin = g; rightMargin = g; bottomMargin = dp(8) })
         return card
     }
 
     private fun statCell(label: String): Pair<View, TextView> {
-        val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
-        val n = Ui.text(ctx, "0", 22f, Theme.TEXT, Theme.BOLD).apply { gravity = Gravity.CENTER }
-        col.addView(n)
-        col.addView(Ui.text(ctx, label, 12f, Theme.MUTED).apply { gravity = Gravity.CENTER })
+        val col = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(4), dp(12), dp(4), dp(12))
+        }
+        val n = Ui.text(ctx, "0", Type.FIGURE).apply {
+            gravity = Gravity.CENTER; maxLines = 1
+            textSize = if (Ui.tv(ctx)) 28f else 20f
+        }
+        col.addView(n, LinearLayout.LayoutParams(-1, -2))
+        col.addView(Ui.text(ctx, label, Type.META).apply { gravity = Gravity.CENTER; maxLines = 1; ellipsize = TextUtils.TruncateAt.END },
+            LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(2) })
         return col to n
     }
 
-    private fun buildStats(): View {
-        val card = Ui.column(ctx)
-        card.addView(Ui.section(ctx, "Live"), lp(bottomDp = 10))
-        val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
-        val a = statCell("Downloads"); val b = statCell("Uploads"); val c = statCell("Sent"); val d = statCell("Received")
+    private fun buildLive(): View {
+        val box = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(Ui.section(ctx, s(R.string.web_live)))
+        val a = statCell(s(R.string.web_downloads)); val b = statCell(s(R.string.web_uploads))
+        val c = statCell(s(R.string.web_sent)); val d = statCell(s(R.string.web_received))
         dlNum = a.second; ulNum = b.second; outNum = c.second; inNum = d.second
-        for (cell in listOf(a, b, c, d)) row.addView(cell.first, LinearLayout.LayoutParams(0, ScreenKit.WRAP, 1f))
-        card.addView(row, lp(bottomDp = 12))
+        val g = Ui.gutter(ctx)
+        val grid = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(g, 0, g, 0)
+            // 1 px LINE cells, like a spec sheet
+            background = GradientDrawable().apply { setColor(0); setStroke(Theme.rule(ctx), Theme.LINE) }
+        }
+        val cells = listOf(a, b, c, d)
+        cells.forEachIndexed { i, cell ->
+            if (i > 0) grid.addView(View(ctx).apply { setBackgroundColor(Theme.LINE) }, LinearLayout.LayoutParams(Theme.rule(ctx), -1))
+            grid.addView(cell.first, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+        box.addView(grid, lp().apply { leftMargin = g; rightMargin = g; bottomMargin = dp(8) })
         events = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-        card.addView(events, lp(bottomDp = 0))
-        return card
+        box.addView(events, lp())
+        return box
     }
 
     // ---------------------------------------------------------------- lifecycle
@@ -243,9 +260,6 @@ class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Scre
         if (!WebShare.running && !starting) startWeb()
         if (Links.hasPermissions(ctx)) startHosting() else host.ensureLinkPermissions { startHosting() }
         refresh()
-        if (!entered) {
-            entered = true
-        }
     }
 
     override fun onHide() {
@@ -263,29 +277,71 @@ class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Scre
 
     override fun refresh() {
         if (!::events.isInitialized) return
+        refreshStatus()
+        refreshStep1()
+        refreshStep2(WebShare.running)
+        refreshStats()
+    }
+
+    private fun refreshStatus() {
+        val c = ctx
         val running = WebShare.running
         val files = Hub.selection.size
         val what = when {
-            files == 0 && includeApp -> "Sharing the FastDrop app"
-            files == 0 -> "Nothing selected"
-            includeApp -> "Sharing ${if (files == 1) "1 file" else "$files files"} + the FastDrop app"
-            else -> "Sharing ${if (files == 1) "1 file" else "$files files"}"
+            files == 0 && includeApp -> s(R.string.web_what_app)
+            files == 0 -> s(R.string.web_what_none)
+            includeApp -> s(R.string.web_what_files_app, files)
+            else -> s(R.string.web_what_files, files)
         }
-        ScreenKit.fadeText(introTitle, if (starting) "Starting…" else if (running) what else if (failed) "Not sharing" else what)
-        ScreenKit.fadeText(introSub,
-            if (files == 0 && !includeApp) "People can still send files to this device from their browser."
-            else "No app needed on the other device. It stays offline.")
-        ScreenKit.setShown(errorCard, failed && !running)
+        val failedNow = failed && !running
+        val title = when {
+            starting -> s(R.string.web_starting)
+            failedNow -> s(R.string.web_failed)
+            else -> what
+        }
+        val meta = when {
+            starting -> s(R.string.web_starting_meta)
+            failedNow -> s(R.string.web_failed_meta, WebShare.PORT)
+            files == 0 && !includeApp -> s(R.string.web_meta_upload_only)
+            else -> s(R.string.web_meta)
+        }
+        val sig = "$title|$meta|$starting|$failedNow"
+        if (sig == lastStatusSig) return
+        lastStatusSig = sig
 
-        refreshStep1()
-        refreshStep2(running)
-        refreshStats()
+        statusBox.removeAllViews()
+        val g = Ui.gutter(c)
+        val size = if (Ui.tv(c)) 56 else 48
+        val row = LinearLayout(c).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(g, dp(12), g, dp(16))
+        }
+        val plate = when {
+            failedNow -> Ui.plate(c, R.drawable.ic_alert, Job.DANGER.fill, Job.DANGER.on, size)
+            starting -> Ui.plate(c, R.drawable.ic_globe, Theme.SURFACE_2, Theme.INK, size)
+            else -> Ui.plate(c, R.drawable.ic_globe, Job.WEB.fill, Job.WEB.on, size)
+        }
+        row.addView(plate, LinearLayout.LayoutParams(dp(size), dp(size)).apply { marginEnd = dp(16) })
+        val col = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(Ui.text(c, title, Type.HERO).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END })
+        val metaRow = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        if (!starting) metaRow.addView(Ui.led(c, if (failedNow) Led.DANGER else Led.OK),
+            LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginEnd = dp(8) })
+        metaRow.addView(Ui.text(c, meta, Type.META), LinearLayout.LayoutParams(0, -2, 1f))
+        col.addView(metaRow, lp(top = 4))
+        row.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
+        statusBox.addView(row, lp())
+        if (failedNow) {
+            statusBox.addView(Ui.jobButton(c, s(R.string.web_try_again), Job.WEB, R.drawable.ic_refresh) { startWeb() },
+                lp().apply { leftMargin = g; rightMargin = g; bottomMargin = dp(16) })
+        }
     }
 
     private fun refreshStep1() {
         val info = try { Links.hostInfo() } catch (_: Exception) { return }
         val wifi = info.wifiQr()
-        ScreenKit.setShown(step1, wifi != null)
+        step1.visibility = if (wifi != null) View.VISIBLE else View.GONE
         if (wifi != lastWifiQr) { lastWifiQr = wifi; wifiQrView.setText(wifi) }
         ScreenKit.subtitleOf(ssidRow)?.text = info.ssid ?: " "
         ScreenKit.subtitleOf(passRow)?.text = info.pass ?: " "
@@ -299,12 +355,11 @@ class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Scre
             lastUrlsSig = sig
             val first = urls.firstOrNull()
             if (first != lastUrlQr) { lastUrlQr = first; urlQrView.setText(first) }
-            urlText.text = first ?: if (starting) "Starting…" else "Connect to Wi‑Fi to get an address"
+            urlText.text = first ?: if (starting) s(R.string.web_starting) else s(R.string.web_no_address)
             val rest = urls.drop(1).take(3).map { it.removePrefix("http://") }
-            moreUrls.text = if (rest.isEmpty()) "" else "Also: " + rest.joinToString("  ·  ")
+            moreUrls.text = if (rest.isEmpty()) "" else s(R.string.web_also, rest.joinToString("  ·  "))
             moreUrls.visibility = if (rest.isEmpty()) View.GONE else View.VISIBLE
             copyBtn.isEnabled = first != null
-            copyBtn.alpha = if (first != null) 1f else 0.5f
         }
     }
 
@@ -319,32 +374,29 @@ class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Scre
         val evs = WebShare.events.take(6)
         val sig = evs.joinToString("|") { it.at.toString() + it.text }
         val now = System.currentTimeMillis()
-        // Rebuild when the list changes, or each tick so "5 s ago" stays fresh.
+        // Rebuild when the list changes, or every 5 s so "5 s ago" stays fresh.
         val stamp = sig + "#" + (evs.firstOrNull()?.let { (now - it.at) / 5000 } ?: 0)
         if (stamp == lastEventSig) return
-        val grew = sig != lastEventSig.substringBefore('#')
         lastEventSig = stamp
         events.removeAllViews()
         if (evs.isEmpty()) {
-            events.addView(Ui.text(ctx, "Waiting for someone to connect…", 13f, Theme.MUTED))
+            val g = Ui.gutter(ctx)
+            events.addView(Ui.text(ctx, s(R.string.web_waiting), Type.META).apply { setPadding(g, dp(8), g, dp(8)) })
             return
         }
-        for ((i, e) in evs.withIndex()) {
+        for (e in evs) {
             val icon = when (e.kind) { 1 -> R.drawable.ic_send; 2 -> R.drawable.ic_receive; else -> R.drawable.ic_globe }
-            val color = when (e.kind) { 1 -> Theme.SEND_B; 2 -> Theme.RECV_A; else -> Theme.MUTED }
-            val r = Ui.row(ctx, icon, e.text, ago(now - e.at), null, null)
-            events.addView(r, LinearLayout.LayoutParams(ScreenKit.MATCH, ScreenKit.WRAP))
-            if (i == 0 && grew) Anim.enter(r)
+            events.addView(Ui.row(ctx, icon, e.text, ago(now - e.at)), LinearLayout.LayoutParams(-1, -2))
         }
     }
 
     private fun ago(ms: Long): String {
-        val s = ms / 1000
+        val sec = ms / 1000
         return when {
-            s < 5 -> "just now"
-            s < 60 -> "$s s ago"
-            s < 3600 -> "${s / 60} min ago"
-            else -> "${s / 3600} h ago"
+            sec < 5 -> s(R.string.web_just_now)
+            sec < 60 -> s(R.string.web_s_ago, sec)
+            sec < 3600 -> s(R.string.web_min_ago, sec / 60)
+            else -> s(R.string.web_h_ago, sec / 3600)
         }
     }
 }
