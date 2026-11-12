@@ -399,6 +399,7 @@ final class AppModel {
         let items = text == nil ? SendItem.expand(urls) : []
         guard text != nil || !items.isEmpty else { showToast("Nothing to send in that selection", .error); return false }
         lastItems = urls; lastPeer = peer; lastText = text
+        defaults.set(peer.id, forKey: "recentPeerID")
         let job = SendJob(peer: peer, items: items, text: text, identity: identity, gate: gate, streams: streams)
         job.useCRC = verifyCRC
         self.job = job
@@ -446,7 +447,13 @@ final class AppModel {
         send(to: peer, urls: [], text: text)
     }
 
-    func composeText(for peer: Peer? = nil) { composing = TextTarget(peer: peer) }
+    func composeText(for peer: Peer? = nil, initial: String = "") { composing = TextTarget(peer: peer, initial: initial) }
+
+    /// The device used for the last send, if it is online right now (for one-click sends from Services).
+    var recentOnlinePeer: Peer? {
+        guard let id = defaults.string(forKey: "recentPeerID") else { return nil }
+        return devices.first { $0.id == id }
+    }
 
     // MARK: several devices
 

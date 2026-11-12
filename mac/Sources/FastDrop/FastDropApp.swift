@@ -76,7 +76,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // `swift run` launches a bare binary: make it a regular Dock app with a menu bar.
         if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
-        MainActor.assumeIsolated { AppModel.shared.start() }
+        MainActor.assumeIsolated {
+            AppModel.shared.start()
+            // "Send with FastDrop" in Finder's Services menu (declared as NSServices in Info.plist).
+            NSApp.servicesProvider = ServicesProvider.shared
+            NSUpdateDynamicServices()
+            MenuBarDrop.shared.start()
+        }
         NSApp.activate()
     }
 

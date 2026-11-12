@@ -35,6 +35,16 @@ scripts/build-app.sh --install   # also copy to /Applications and launch
 
 On first launch, macOS asks for **Local Network** access. Allow it, or the Mac can't see your phones. If the firewall asks about incoming connections, allow those too.
 
+## Send from Finder and the menu bar
+
+- **Services menu:** select files in Finder, then right-click → *Services* → **Send with FastDrop** (or select text anywhere → *Services* → **Send Text with FastDrop**). The files land in the tray and, if the device you last used is online, a small prompt offers a one-click send.
+  - The first time, macOS may not list it yet. Enable it under *System Settings → Keyboard → Keyboard Shortcuts → Services* (Files and Folders / Text), or log out and back in. Running the built app once from `build/` or `/Applications` registers it.
+- **Drop on the menu bar icon:** drag files onto the FastDrop icon in the menu bar to add them to the tray.
+
+## Downloaded builds (Gatekeeper)
+
+Release builds (`FastDrop-mac.zip`) are signed ad-hoc and **not notarized**. After unzipping, right-click `FastDrop.app` → **Open** (then *Open* again) the first time. Or run `xattr -dr com.apple.quarantine FastDrop.app`. Verify the download with the `.sha256` file (`shasum -a 256 -c`).
+
 ## Connect a phone
 
 1. Put both devices on the same Wi‑Fi, or join the phone's hotspot from the Mac.
