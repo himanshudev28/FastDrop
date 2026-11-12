@@ -9,6 +9,7 @@ struct OfferCard: View {
     @Environment(\.colorScheme) private var scheme
     @State private var appeared = false
     @State private var totalWindow: Double = 1
+    @State private var alwaysAccept = false
 
     private var shown: [OfferFile] { Array(offer.files.prefix(4)) }
     private var extra: Int { max(0, offer.files.count - 4) }
@@ -17,16 +18,32 @@ struct OfferCard: View {
         VStack(spacing: 16) {
             avatar
             VStack(spacing: 4) {
-                Text("\(offer.from) wants to send you").font(.title3.weight(.semibold)).multilineTextAlignment(.center)
-                Text("\(offer.files.count) file\(offer.files.count == 1 ? "" : "s") · \(Fmt.bytes(offer.total))")
-                    .font(.subheadline).foregroundStyle(.secondary)
+                Text(offer.text != nil ? "\(offer.from) wants to send you \(isLink ? "a link" : "text")" : "\(offer.from) wants to send you")
+                    .font(.title3.weight(.semibold)).multilineTextAlignment(.center)
+                if offer.text == nil {
+                    Text("\(offer.files.count) file\(offer.files.count == 1 ? "" : "s") · \(Fmt.bytes(offer.total))")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+                HStack(spacing: 8) {
+                    if offer.trusted {
+                        Label("Trusted", systemImage: "checkmark.seal.fill")
+                            .font(.caption.weight(.semibold)).foregroundStyle(Palette.success)
+                            .accessibilityLabel("Trusted device")
+                    }
+                    Text("Code \(offer.code)").font(.caption.monospacedDigit().weight(.semibold)).foregroundStyle(.secondary)
+                        .help("The sending device shows the same code")
+                }
             }
-            fileList
+            if let text = offer.text { textPreview(text) } else { fileList }
+            if offer.canTrust && !offer.trusted {
+                Toggle("Always accept from \(offer.from)", isOn: $alwaysAccept)
+                    .toggleStyle(.checkbox).font(.callout)
+            }
             countdown
             HStack(spacing: 12) {
                 Button { model.respond(false) } label: { Text("Decline").frame(maxWidth: .infinity) }
                     .keyboardShortcut(.cancelAction)
-                Button { model.respond(true) } label: { Text("Accept").frame(maxWidth: .infinity) }
+                Button { model.respond(true, alwaysAccept: alwaysAccept) } label: { Text("Accept").frame(maxWidth: .infinity) }
                     .buttonStyle(.borderedProminent).tint(Color(hex: 0x0B8F6A))   // dark enough for white text
                     .keyboardShortcut(.defaultAction)
             }
@@ -42,7 +59,8 @@ struct OfferCard: View {
             .strokeBorder(scheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.06), lineWidth: 1))
         .shadow(color: .black.opacity(0.25), radius: 30, y: 14)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(offer.from) wants to send you \(offer.files.count) files, \(Fmt.bytes(offer.total))")
+        .accessibilityLabel(offer.text != nil ? "\(offer.from) wants to send you text, code \(offer.code)"
+                                : "\(offer.from) wants to send you \(offer.files.count) files, \(Fmt.bytes(offer.total)), code \(offer.code)")
         .onAppear {
             totalWindow = max(1, offer.deadline.timeIntervalSinceNow)
             appeared = true
@@ -65,6 +83,17 @@ struct OfferCard: View {
         }
         .frame(height: 84)
         .accessibilityHidden(true)
+    }
+
+    private var isLink: Bool { offer.text.map { AppModel.url(in: $0) != nil } ?? false }
+
+    private func textPreview(_ text: String) -> some View {
+        Text(text.count > 400 ? String(text.prefix(400)) + "…" : text)
+            .font(.callout).lineLimit(5).multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.primary.opacity(0.06)))
+            .accessibilityLabel("Text: \(text.prefix(200))")
     }
 
     private var fileList: some View {

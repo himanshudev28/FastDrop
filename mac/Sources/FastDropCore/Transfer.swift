@@ -24,6 +24,14 @@ public final class Transfer: @unchecked Sendable, Identifiable {
     /// Sender: all bytes are written; only the receiver's final "ok" is outstanding.
     public var sentAll = false
 
+    private var _baseline: Int64 = 0
+    /// Receiver: the confirmation code the sender shows. Sender: set when the offer went out.
+    public var code: String?
+    /// Sender: a text/link offer (no data streams).
+    public var isText = false
+    /// Per-chunk CRC32 was agreed for this transfer.
+    public var crcOn = false
+
     private var finishHandlers: [(Transfer) -> Void] = []
 
     /// Runs once, on the thread that ends the transfer. Runs immediately if it already ended.
@@ -44,6 +52,16 @@ public final class Transfer: @unchecked Sendable, Identifiable {
     public var message: String { lock.lock(); defer { lock.unlock() }; return _message }
     public var running: Bool { state == .running }
     public var lastProgress: Date { lock.lock(); defer { lock.unlock() }; return _lastProgress }
+
+    /// Bytes that were already at the receiver when this session started (resume).
+    public var baseline: Int64 { lock.lock(); defer { lock.unlock() }; return _baseline }
+    /// Bytes moved in this session only.
+    public var sessionDone: Int64 { lock.lock(); defer { lock.unlock() }; return _done - _baseline }
+
+    /// Counts bytes that are already in place, before any data moves.
+    public func preset(_ n: Int64) {
+        lock.lock(); _done += n; _baseline += n; lock.unlock()
+    }
 
     public func add(_ n: Int) {
         lock.lock(); _done += Int64(n); _lastProgress = Date(); lock.unlock()

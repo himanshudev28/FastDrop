@@ -18,6 +18,7 @@ public enum Proto {
     public static let magicData: Int32 = 0x4644_4431   // "FDD1"
     public static let magicHello: Int32 = 0x4644_4831  // "FDH1"
 
+    public static let caps = ["text", "resume", "trust", "crc"]
     public static let chunk = 8 << 20          // 8 MB work units shared by the parallel streams
     public static let socketBuffer = 4 << 20   // big TCP windows for fast Wi-Fi
     public static let ioBuffer = 1 << 20
@@ -31,6 +32,7 @@ public enum FDError: Error, LocalizedError, Equatable {
     case cancelled
     case system(String)
     case protocolError(String)
+    case dataCheck
 
     public var errorDescription: String? {
         switch self {
@@ -39,6 +41,7 @@ public enum FDError: Error, LocalizedError, Equatable {
         case .cancelled: return "Cancelled"
         case .system(let s): return s
         case .protocolError(let s): return s
+        case .dataCheck: return "Data check failed"
         }
     }
 

@@ -25,15 +25,39 @@ struct SettingsView: View {
                         Button("Choose…", action: chooseFolder).disabled(model.isBusy)
                     }
                 }
-                Toggle("Accept files automatically", isOn: $model.autoAccept)
-                Text("Only on networks you trust.").font(.caption).foregroundStyle(.secondary)
+                Picker("Auto-accept", selection: $model.acceptMode) {
+                    Text("Ask every time").tag(AcceptMode.ask)
+                    Text("Trusted devices").tag(AcceptMode.trusted)
+                    Text("Everyone").tag(AcceptMode.everyone)
+                }
+                Text(acceptHelp).font(.caption).foregroundStyle(.secondary)
                 Toggle("Show in Finder when done", isOn: $model.revealWhenDone)
+            }
+            Section("Trusted devices") {
+                if model.trustedDevices.isEmpty {
+                    Text("None yet. Tick “Always accept from…” on an incoming offer to trust a device.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(model.trustedDevices) { d in
+                    LabeledContent {
+                        Button("Remove", role: .destructive) { model.removeTrusted(d) }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(d.name)
+                            Text("Added \(d.added.formatted(date: .abbreviated, time: .omitted))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
             Section("Sending") {
                 Picker("Parallel streams", selection: $model.streams) {
                     ForEach(1...8, id: \.self) { Text("\($0)").tag($0) }
                 }
                 Text("4 is fastest on most Wi‑Fi. Use fewer on older TVs.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Verify data (CRC32)", isOn: $model.verifyCRC)
+                Text("Checks every chunk. Slower, and uses more CPU on both devices.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("General") {
@@ -53,6 +77,15 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 480)
         .onDisappear(perform: commitName)
+        .onAppear { model.refreshTrusted() }
+    }
+
+    private var acceptHelp: String {
+        switch model.acceptMode {
+        case .ask: return "Every offer asks first."
+        case .trusted: return "Devices you trusted send without asking. Others ask first."
+        case .everyone: return "Accepts everything without asking. Only on networks you trust."
+        }
     }
 
     private var version: String {

@@ -90,6 +90,9 @@ struct ContentView: View {
             HistoryView()
                 .inspectorColumnWidth(min: 260, ideal: 300, max: 420)
         }
+        .sheet(item: $model.composing) { target in
+            TextComposer(target: target)
+        }
         .sheet(isPresented: $model.showScanner) {
             QRScannerView(onCode: { model.connect(scanned: $0) }, onCancel: { model.showScanner = false })
         }
@@ -113,6 +116,12 @@ struct ContentView: View {
             }
             .help("Add files or folders to send (⌘O)")
             .disabled(offerUp)
+
+            Button { model.composeText() } label: {
+                Label("Send Text", systemImage: "text.bubble")
+            }
+            .help("Send a text or link to a device, or the clipboard")
+            .disabled(offerUp || model.devices.isEmpty)
 
             Button { model.showScanner = true } label: {
                 Label("Scan Phone's QR", systemImage: "qrcode.viewfinder")

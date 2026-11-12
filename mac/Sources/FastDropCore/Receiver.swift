@@ -5,9 +5,25 @@ public struct OfferFile: Sendable, Hashable {
     public let name: String      // cleaned relative path, may contain "/"
     public let size: Int64
     public let appLabel: String? // set when the phone sends an app (base + split APKs)
+    let rawName: String          // as sent: auth digests and resume keys use it
+    let mtime: Int64?
+
+    init(name: String, size: Int64, appLabel: String?, rawName: String? = nil, mtime: Int64? = nil) {
+        self.name = name; self.size = size; self.appLabel = appLabel; self.rawName = rawName ?? name; self.mtime = mtime
+    }
 }
 
-/// A file offer waiting for the user to accept or decline.
+/// The three auto-accept modes (replaces the old on/off switch).
+public enum AcceptMode: String, Sendable, CaseIterable {
+    case ask, trusted, everyone
+}
+
+public extension AcceptMode {
+    /// Old `autoAccept` bool: true -> Everyone, otherwise Trusted devices.
+    static func migrated(legacyAutoAccept: Bool) -> AcceptMode { legacyAutoAccept ? .everyone : .trusted }
+}
+
+/// A file or text offer waiting for the user to accept or decline.
 public final class IncomingOffer: @unchecked Sendable, Identifiable {
     public let id = UUID()
     public let from: String
@@ -15,44 +31,56 @@ public final class IncomingOffer: @unchecked Sendable, Identifiable {
     public let files: [OfferFile]
     public let total: Int64
     public let deadline: Date
+    /// Text or link sent instead of files.
+    public let text: String?
+    /// 4-digit code derived from the session id; the sender shows the same one.
+    public let code: String
+    /// The offer proved (HMAC) that it comes from a device the user already trusts.
+    public let trusted: Bool
+    /// The sender has a stable id, so "Always accept from this device" can be offered.
+    public let canTrust: Bool
 
     private let sem = DispatchSemaphore(value: 0)
     private let lock = NSLock()
     private var answered = false
     private var accepted = false
+    private var wantsTrust = false
 
     /// Fires when the offer goes away without the user answering: "timeout", or "gone" when the sender gave up.
     public var onExpire: ((String) -> Void)?
 
-    init(from: String, fromType: String, files: [OfferFile], total: Int64, timeout: TimeInterval) {
+    init(from: String, fromType: String, files: [OfferFile], total: Int64, timeout: TimeInterval,
+         text: String?, code: String, trusted: Bool, canTrust: Bool) {
         self.from = from; self.fromType = fromType; self.files = files; self.total = total
         self.deadline = Date().addingTimeInterval(timeout)
+        self.text = text; self.code = code; self.trusted = trusted; self.canTrust = canTrust
     }
 
-    public func respond(_ accept: Bool) {
+    public func respond(_ accept: Bool, trust: Bool = false) {
         lock.lock()
         guard !answered else { lock.unlock(); return }
-        answered = true; accepted = accept
+        answered = true; accepted = accept; wantsTrust = accept && trust && canTrust && !trusted
         lock.unlock()
         sem.signal()
     }
 
     /// Waits for the user, giving up at the deadline or when the sender hangs up.
-    func wait(ctrl: Sock) -> (accepted: Bool, reason: String) {
+    func wait(ctrl: Sock) -> (accepted: Bool, reason: String, trust: Bool) {
+        func result() -> (accepted: Bool, reason: String, trust: Bool) {
+            lock.lock(); defer { lock.unlock() }
+            return (accepted, accepted ? "" : "declined", wantsTrust)
+        }
         while true {
-            if sem.wait(timeout: .now() + 0.4) == .success {
-                lock.lock(); defer { lock.unlock() }
-                return (accepted, accepted ? "" : "declined")
-            }
+            if sem.wait(timeout: .now() + 0.4) == .success { return result() }
             let gone = ctrl.peerClosed()
             if gone || Date() >= deadline {
                 lock.lock()
                 let raced = answered
                 answered = true
                 lock.unlock()
-                if raced { sem.wait(); lock.lock(); defer { lock.unlock() }; return (accepted, accepted ? "" : "declined") }
+                if raced { sem.wait(); return result() }
                 onExpire?(gone ? "gone" : "timeout")
-                return (false, gone ? "gone" : "timeout")
+                return (false, gone ? "gone" : "timeout", false)
             }
         }
     }
@@ -65,26 +93,33 @@ public final class Receiver: @unchecked Sendable {
 
     /// Show the offer to the user (called on a background thread). They must call `respond`.
     public var present: ((IncomingOffer) -> Void)?
-    public var autoAccept: () -> Bool = { false }
+    public var acceptMode: () -> AcceptMode = { .trusted }
+    /// Whether to agree when a sender asks for per-chunk CRC32 checks.
+    public var agreeCRC: () -> Bool = { true }
     public var saveDir: () -> URL = { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/FastDrop") }
     public var onStart: ((Transfer) -> Void)?
     public var onSaved: ((_ file: URL, _ from: String, _ size: Int64) -> Void)?
+    /// A text or link offer was accepted (it arrives inside the offer; nothing else follows).
+    public var onText: ((_ text: String, _ from: String) -> Void)?
     public var onListenError: ((String?) -> Void)?
 
     private let me: Identity
     private let gate: Gate
     private let port: UInt16
+    private let stores: Stores
     private let lock = NSLock()
     private var sessions: [String: RxSession] = [:]
+    private var replay: [String: Date] = [:]
     private var started = false
 
-    public init(identity: Identity, gate: Gate, port: UInt16 = Proto.port) {
-        self.me = identity; self.gate = gate; self.port = port
+    public init(identity: Identity, gate: Gate, port: UInt16 = Proto.port, stores: Stores = .shared) {
+        self.me = identity; self.gate = gate; self.port = port; self.stores = stores
     }
 
     public func start() {
         guard !started else { return }
         started = true
+        stores.resume.prune()
         let t = Thread { [weak self] in self?.acceptLoop() }
         t.name = "fd-server"; t.qualityOfService = .userInitiated; t.start()
     }
@@ -154,21 +189,46 @@ public final class Receiver: @unchecked Sendable {
         } catch {}
     }
 
-    private func reply(_ c: Sock, _ accept: Bool, _ reason: String) {
-        try? c.writeJSON(["accept": accept, "reason": reason])
+    private func reply(_ c: Sock, _ accept: Bool, _ reason: String, extra: [String: Any] = [:]) {
+        var o: [String: Any] = ["accept": accept, "reason": reason, "v": 2, "dev": me.id]
+        for (k, v) in extra { o[k] = v }
+        try? c.writeJSON(o)
+    }
+
+    /// Authenticated-offer check (see "Authenticated offers" in docs/PROTOCOL.md).
+    private func isTrustedOffer(_ o: [String: Any], id: String, dev: String?, files: [(name: String, size: Int64)], text: String?) -> Bool {
+        guard (o["v"] as? NSNumber)?.intValue ?? 1 >= 2, let dev, !dev.isEmpty,
+              let auth = o["auth"] as? String, let ts = (o["ts"] as? NSNumber)?.int64Value,
+              let t = stores.trust.device(dev), let key = Spec.unhex(t.key) else { return false }
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        guard abs(now - ts) <= Spec.authWindowMs else { return false }
+        guard Spec.verifyAuth(key: key, auth: auth, id: id, dev: dev, ts: ts,
+                              filesDigest: Spec.filesDigest(files: files, text: text)) else { return false }
+        lock.lock(); defer { lock.unlock() }
+        let cutoff = Date().addingTimeInterval(-24 * 3600)
+        replay = replay.filter { $0.value > cutoff }
+        guard replay[id] == nil else { return false }
+        replay[id] = Date()
+        return true
     }
 
     // MARK: control connection
 
     private func offer(_ c: Sock) throws {
         let o = try c.readJSON(max: 4 << 20)
-        guard let sid = o["id"] as? String, !sid.isEmpty, sid.utf8.count <= 200,
-              let arr = o["files"] as? [[String: Any]], !arr.isEmpty, arr.count <= 10_000 else {
+        let text = o["text"] as? String
+        let arr = (o["files"] as? [[String: Any]]) ?? []
+        guard let sid = o["id"] as? String, !sid.isEmpty, sid.utf8.count <= 200, arr.count <= 10_000,
+              text != nil ? (arr.isEmpty && !text!.isEmpty) : !arr.isEmpty else {
             reply(c, false, "invalid"); return
         }
+        if let text, text.unicodeScalars.count > Spec.maxText { reply(c, false, "invalid"); return }
         let fromName = String(((o["name"] as? String) ?? "Unknown device").prefix(60))
         let fromType = (o["type"] as? String) ?? "phone"
+        let v2 = ((o["v"] as? NSNumber)?.intValue ?? 1) >= 2
+        let dev = v2 ? (o["dev"] as? String).flatMap { $0.isEmpty || $0.utf8.count > 200 ? nil : $0 } : nil
         var files: [OfferFile] = []
+        var raw: [(name: String, size: Int64)] = []
         var total: Int64 = 0
         for f in arr {
             guard let name = f["name"] as? String, let size = (f["size"] as? NSNumber)?.int64Value,
@@ -177,22 +237,33 @@ public final class Receiver: @unchecked Sendable {
             guard !overflow else { reply(c, false, "invalid"); return }
             total = sum
             let label = (f["app"] as? [String: Any])?["l"] as? String
-            files.append(OfferFile(name: Storage.cleanName(name), size: size, appLabel: label.map { String($0.prefix(80)) }))
+            files.append(OfferFile(name: Storage.cleanName(name), size: size, appLabel: label.map { String($0.prefix(80)) },
+                                   rawName: name, mtime: v2 ? (f["mtime"] as? NSNumber)?.int64Value : nil))
+            raw.append((name, size))
         }
+
+        let trustedOffer = isTrustedOffer(o, id: sid, dev: dev, files: raw, text: text)
+        let resumable = v2 && dev != nil && (o["chunk"] as? NSNumber)?.intValue == Proto.chunk && text == nil
+        let wantCRC = v2 && (o["crc"] as? Bool) == true && text == nil
 
         guard gate.tryReserve() else { reply(c, false, "busy"); return }
         var reserved = true
         defer { if reserved { gate.release() } }
 
+        let mode = acceptMode()
+        let code = Spec.code(id: sid)
         let accepted: Bool
         var reason = ""
-        if autoAccept() {
+        var pair = false
+        if mode == .everyone || (mode == .trusted && trustedOffer) {
             accepted = true
         } else if let present {
-            let offer = IncomingOffer(from: fromName, fromType: fromType, files: files, total: total, timeout: Self.offerTimeout)
+            let offer = IncomingOffer(from: fromName, fromType: fromType, files: files, total: total, timeout: Self.offerTimeout,
+                                      text: text, code: code, trusted: trustedOffer, canTrust: dev != nil)
             c.setTimeout(0)
             present(offer)
-            (accepted, reason) = offer.wait(ctrl: c)
+            let r = offer.wait(ctrl: c)
+            (accepted, reason, pair) = (r.accepted, r.reason, r.trust)
         } else {
             accepted = false; reason = "closed"
         }
@@ -201,11 +272,28 @@ public final class Receiver: @unchecked Sendable {
             reply(c, false, reason)
             return
         }
+        c.setTimeout(10)
+
+        var extra: [String: Any] = [:]
+        if pair, let dev { extra["trust"] = stores.trust.add(id: dev, name: fromName) }
+
+        if let text {
+            gate.release(); reserved = false
+            reply(c, true, "", extra: extra)
+            try? c.writeJSON(["ok": true])
+            onText?(text, fromName)
+            return
+        }
 
         let t = Transfer(outgoing: false, peerName: fromName, peerType: fromType, total: total, names: files.map(\.name))
+        t.code = code
+        let crc = wantCRC && agreeCRC()
+        if crc { extra["crc"] = true }
+        t.crcOn = crc
         let session: RxSession
         do {
-            session = try RxSession(id: sid, files: files, dir: saveDir(), transfer: t) { [weak self] url, size in
+            session = try RxSession(id: sid, files: files, dir: saveDir(), transfer: t, dev: resumable ? dev : nil, crc: crc,
+                                    stores: stores) { [weak self] url, size in
                 self?.onSaved?(url, fromName, size)
             }
         } catch {
@@ -213,30 +301,38 @@ public final class Receiver: @unchecked Sendable {
             reply(c, false, "storage")
             return
         }
+        let have = session.haveJSON()
+        if !have.isEmpty { extra["have"] = have }
+        t.preset(session.presentBytes)
+
         // The transfer owns the gate from here; it's released when the transfer finishes.
         reserved = false
         let gate = self.gate
         t.onFinish { _ in gate.release() }
         lock.lock(); sessions[sid] = session; lock.unlock()
         defer {
-            session.close(deleteUnfinished: true)
+            session.close()
             lock.lock(); sessions[sid] = nil; lock.unlock()
         }
         t.register(c)
         onStart?(t)
 
-        do { try c.writeJSON(["accept": true, "reason": ""]) } catch {
+        var accept: [String: Any] = ["accept": true, "reason": "", "v": 2, "dev": me.id]
+        for (k, v) in extra { accept[k] = v }
+        do { try c.writeJSON(accept) } catch {
             t.finish(.cancelled, "\(fromName) cancelled"); return
         }
         do { try session.start() } catch {
             t.finish(.failed, "Couldn't save: \(error.localizedDescription)"); return
         }
 
+        var lastCheckpoint = Date()
         while t.running && !session.complete {
             session.waitDone(0.5)
             if session.complete { break }
             if c.peerClosed() { t.finish(.cancelled, "\(fromName) cancelled"); break }
             if Date().timeIntervalSince(t.lastProgress) > 30 { t.finish(.failed, "Transfer stalled"); break }
+            if Date().timeIntervalSince(lastCheckpoint) >= 10 { session.checkpoint(); lastCheckpoint = Date() }
         }
         if session.complete && t.running {
             c.setTimeout(10)
@@ -263,6 +359,7 @@ public final class Receiver: @unchecked Sendable {
         let buf = UnsafeMutableRawPointer.allocate(byteCount: cap, alignment: 16)
         let hdr = UnsafeMutableRawPointer.allocate(byteCount: 16, alignment: 8)
         defer { buf.deallocate(); hdr.deallocate() }
+        let crcOn = s.crc
         do {
             while t.running {
                 try c.readExact(hdr, 16)
@@ -270,14 +367,18 @@ public final class Receiver: @unchecked Sendable {
                 let off = Int64(bigEndian: hdr.loadUnaligned(fromByteOffset: 4, as: Int64.self))
                 let len = Int64(Int32(bigEndian: hdr.loadUnaligned(fromByteOffset: 12, as: Int32.self)))
                 if fi < 0 { break }
-                guard fi < s.files.count, off >= 0, len >= 0, off <= s.files[fi].size - len else {
+                // Every frame is exactly one chunk: aligned offset, 8 MB long except a file's last chunk.
+                guard fi < s.files.count, off >= 0, len > 0, off % Int64(Proto.chunk) == 0,
+                      off < s.files[fi].size, len == min(Int64(Proto.chunk), s.files[fi].size - off) else {
                     throw FDError.protocolError("bad frame")
                 }
                 let fd = try s.sink(fi)
                 var pos = off, rem = len
+                var sum: UInt32 = 0
                 while rem > 0 {
                     let n = try c.readSome(buf, Int(min(rem, Int64(cap))))
                     if n == 0 { throw FDError.protocolError("Sender disconnected") }
+                    if crcOn { sum = Spec.crc32(sum, buf.assumingMemoryBound(to: UInt8.self), n) }   // only when agreed
                     var w = 0
                     while w < n {
                         let r = pwrite(fd, buf + w, n - w, off_t(pos) + off_t(w))
@@ -287,32 +388,43 @@ public final class Receiver: @unchecked Sendable {
                     pos += Int64(n); rem -= Int64(n)
                     t.add(n)
                 }
+                if crcOn {
+                    try c.readExact(buf, 4)
+                    let want = UInt32(bigEndian: buf.loadUnaligned(as: UInt32.self))
+                    if want != sum { throw FDError.dataCheck }
+                }
                 try s.chunkDone(fi, off, len)
             }
         } catch {
             if t.running && !s.complete {
-                t.finish(.failed, "Transfer interrupted: \(error.localizedDescription)")
+                if case FDError.dataCheck = error { t.finish(.failed, "Data check failed") }
+                else { t.finish(.failed, "Transfer interrupted: \(error.localizedDescription)") }
                 s.wake()
             }
         }
     }
 }
 
-/// Files of one incoming transfer. Each is written to a hidden `.part` file and renamed when complete,
-/// so Finder never shows half-received files.
+/// Files of one incoming transfer. Each is written to a hidden `.<name>.<id>.fdpart` file next to its final
+/// place and renamed when complete, so Finder never shows half-received files. Protocol-2 sessions keep
+/// the partials (and a resume record) when they end early; protocol-1 sessions delete them.
 final class RxSession: @unchecked Sendable {
     let id: String
     let files: [OfferFile]
     let transfer: Transfer
+    let crc: Bool
     private let dir: URL
     private let saved: (URL, Int64) -> Void
+    private let stores: Stores
+    private let resumeKeys: [String?]    // non-nil only for resumable (v2) sessions
 
     private let lock = NSLock()
     private let cond = NSCondition()
     private var fds: [Int32]
-    private var temps: [URL?]
+    private var partials: [URL?]
     private var got: [Int64]
-    private var chunkOffsets: [Set<Int64>]
+    private var done: [Set<Int>]         // finished chunk indices per file
+    private var dirty = false
     private var active = 0
     private let activeCond = NSCondition()
     private var finished: [Bool]
@@ -320,53 +432,89 @@ final class RxSession: @unchecked Sendable {
     private var remaining: Int
     private var closed = false
     private(set) var complete = false
+    private(set) var presentBytes: Int64 = 0
 
-    init(id: String, files: [OfferFile], dir: URL, transfer: Transfer, saved: @escaping (URL, Int64) -> Void) throws {
+    init(id: String, files: [OfferFile], dir: URL, transfer: Transfer, dev: String?, crc: Bool, stores: Stores,
+         saved: @escaping (URL, Int64) -> Void) throws {
         self.id = id; self.files = files; self.dir = dir; self.transfer = transfer; self.saved = saved
+        self.crc = crc; self.stores = stores
+        resumeKeys = files.map { f in dev.map { Spec.resumeKey(dev: $0, name: f.rawName, size: f.size, mtime: f.mtime) } }
         fds = Array(repeating: -1, count: files.count)
-        temps = Array(repeating: nil, count: files.count)
+        partials = Array(repeating: nil, count: files.count)
         got = Array(repeating: 0, count: files.count)
-        chunkOffsets = Array(repeating: [], count: files.count)
+        done = Array(repeating: [], count: files.count)
         finished = Array(repeating: false, count: files.count)
         remaining = files.count
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         guard FileManager.default.isWritableFile(atPath: dir.path) else { throw FDError.system("Folder isn't writable") }
+        restore()
     }
 
-    /// Empty files have no frames: create them right away.
-    func start() throws {
-        for (i, f) in files.enumerated() where f.size == 0 {
-            _ = try sink(i)
-            try finishFile(i)
+    /// Picks up partial files from earlier interrupted transfers.
+    private func restore() {
+        for i in files.indices where files[i].size > 0 {
+            guard let key = resumeKeys[i], let r = stores.resume.record(key), r.size == files[i].size,
+                  let attrs = try? FileManager.default.attributesOfItem(atPath: r.path),
+                  (attrs[.size] as? NSNumber)?.int64Value == files[i].size else { continue }
+            let set = Spec.indices(of: r.chunks, limit: Spec.chunkCount(size: files[i].size))
+            guard !set.isEmpty else { continue }
+            done[i] = set
+            partials[i] = URL(fileURLWithPath: r.path)
+            got[i] = set.reduce(Int64(0)) { $0 + Spec.chunkLength(index: $1, size: files[i].size) }
+            presentBytes += got[i]
         }
     }
 
-    /// The open temp file for index `i`, created on first use.
+    /// `have` for the accept reply: done chunk ranges of reopened partials, by file index.
+    func haveJSON() -> [String: Any] {
+        var out: [String: Any] = [:]
+        for i in files.indices where !done[i].isEmpty { out[String(i)] = Spec.ranges(of: done[i]) }
+        return out
+    }
+
+    /// Empty files have no frames: create them right away. A partial that already holds every chunk is finished too.
+    func start() throws {
+        for (i, f) in files.enumerated() {
+            if f.size == 0 { _ = try sink(i); try finishFile(i) }
+            else if got[i] == f.size { _ = try sink(i); try finishFile(i) }
+        }
+    }
+
+    /// The open partial file for index `i`, created (or reopened when resuming) on first use.
     func sink(_ i: Int) throws -> Int32 {
         lock.lock(); defer { lock.unlock() }
         if closed { throw FDError.cancelled }
         if fds[i] >= 0 { return fds[i] }
         let rel = files[i].name
+        if let p = partials[i] {
+            let fd = open(p.path, O_RDWR)
+            guard fd >= 0 else { throw FDError.errno("Can't reopen \(rel)") }
+            fds[i] = fd
+            return fd
+        }
         let parent = (rel as NSString).deletingLastPathComponent
         let folder = parent.isEmpty ? dir : dir.appendingPathComponent(parent, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let tmp = folder.appendingPathComponent(".fastdrop-\(id.prefix(8))-\(i).part")
+        let tag = resumeKeys[i].map { String($0.prefix(12)) } ?? String(id.prefix(8))
+        let tmp = folder.appendingPathComponent(".\((rel as NSString).lastPathComponent).\(tag).fdpart")
         let fd = open(tmp.path, O_RDWR | O_CREAT | O_TRUNC, 0o644)
         guard fd >= 0 else { throw FDError.errno("Can't create \(rel)") }
         if files[i].size > 0 { _ = ftruncate(fd, off_t(files[i].size)) }
         fds[i] = fd
-        temps[i] = tmp
+        partials[i] = tmp
         return fd
     }
 
+    /// A chunk counts only now, after its whole payload is written (and its CRC passed).
     /// A repeated chunk would let `got` reach the file size with holes left in the file, so reject it.
     func chunkDone(_ i: Int, _ off: Int64, _ len: Int64) throws {
         lock.lock()
-        guard chunkOffsets[i].insert(off).inserted else {
+        guard done[i].insert(Int(off / Int64(Proto.chunk))).inserted else {
             lock.unlock()
             throw FDError.protocolError("duplicate chunk")
         }
         got[i] += len
+        dirty = true
         let full = got[i] == files[i].size
         lock.unlock()
         if full { try finishFile(i) }
@@ -374,14 +522,15 @@ final class RxSession: @unchecked Sendable {
 
     private func finishFile(_ i: Int) throws {
         lock.lock()
-        guard !finished[i], !closed, let tmp = temps[i] else { lock.unlock(); return }
+        guard !finished[i], !closed, let tmp = partials[i] else { lock.unlock(); return }
         finished[i] = true
-        Darwin.close(fds[i]); fds[i] = -1
+        if fds[i] >= 0 { Darwin.close(fds[i]); fds[i] = -1 }
         let dest = uniqueURL(for: files[i].name)
         lock.unlock()
 
         try FileManager.default.moveItem(at: tmp, to: dest)
-        lock.lock(); temps[i] = nil; lock.unlock()
+        lock.lock(); partials[i] = nil; lock.unlock()
+        if let key = resumeKeys[i] { stores.resume.remove(key) }
         saved(dest, files[i].size)
 
         cond.lock()
@@ -405,6 +554,21 @@ final class RxSession: @unchecked Sendable {
         return url
     }
 
+    /// Writes resume records for unfinished files that have at least one done chunk.
+    func checkpoint() {
+        lock.lock()
+        guard !finished.isEmpty else { lock.unlock(); return }
+        let wasDirty = dirty
+        dirty = false
+        var recs: [ResumeRecord] = []
+        for i in files.indices where !finished[i] && !done[i].isEmpty {
+            guard let key = resumeKeys[i], let p = partials[i] else { continue }
+            recs.append(ResumeRecord(key: key, path: p.path, size: files[i].size, chunks: Spec.ranges(of: done[i]), updated: Date()))
+        }
+        lock.unlock()
+        if wasDirty { recs.forEach { stores.resume.save($0) } }
+    }
+
     func waitDone(_ seconds: TimeInterval) {
         cond.lock()
         if !complete { cond.wait(until: Date().addingTimeInterval(seconds)) }
@@ -417,8 +581,9 @@ final class RxSession: @unchecked Sendable {
     func enter() { activeCond.lock(); active += 1; activeCond.unlock() }
     func leave() { activeCond.lock(); active -= 1; activeCond.broadcast(); activeCond.unlock() }
 
-    /// Closes open files. Finished files are kept; half-written temp files are deleted.
-    func close(deleteUnfinished: Bool) {
+    /// Closes open files. Finished files are kept. Unfinished ones keep their partial (and record) in a
+    /// protocol-2 session when at least one chunk is done; everything else is deleted.
+    func close() {
         lock.lock(); closed = true; lock.unlock()
         // Streams were shut down by Transfer.finish; give them a moment to leave pwrite.
         let until = Date().addingTimeInterval(3)
@@ -427,9 +592,25 @@ final class RxSession: @unchecked Sendable {
         activeCond.unlock()
         lock.lock()
         for i in fds.indices where fds[i] >= 0 { Darwin.close(fds[i]); fds[i] = -1 }
-        let leftovers = temps.compactMap { $0 }
         lock.unlock()
-        if deleteUnfinished { leftovers.forEach { try? FileManager.default.removeItem(at: $0) } }
+
+        checkpointFinal()
+        lock.lock()
+        var drop: [URL] = []
+        for i in files.indices where !finished[i] {
+            guard let p = partials[i] else { continue }
+            if resumeKeys[i] == nil || done[i].isEmpty {
+                drop.append(p)
+                if let key = resumeKeys[i] { stores.resume.remove(key) }
+            }
+        }
+        lock.unlock()
+        drop.forEach { try? FileManager.default.removeItem(at: $0) }
+    }
+
+    private func checkpointFinal() {
+        lock.lock(); dirty = true; lock.unlock()
+        checkpoint()
     }
 }
 

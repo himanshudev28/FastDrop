@@ -14,6 +14,13 @@ A native SwiftUI Mac app that sends and receives files with **FastDrop for Andro
   - A toolbar, a History inspector, a Settings window (⌘,) and a menu bar extra.
   - Drop files on the Dock icon to add them.
   - Keyboard shortcuts: ⌘O to add files, ⌘R to scan the network, ⇧⌘K to show the QR code, ⌘. to cancel.
+- **Protocol 2 (FastDrop 2.1),** still compatible with 2.0 phones and TVs:
+  - Send a text, link or the clipboard to a device (right-click it, or the *Send Text* toolbar button). Received text lands in History with Copy and Open.
+  - A 4-digit confirmation code on both screens for first-time senders.
+  - **Trusted devices:** tick *Always accept from …* once. Auto-accept is *Ask every time*, *Trusted devices* (default) or *Everyone*, and the trusted list is in Settings.
+  - **Resume:** an interrupted transfer continues where it stopped when you press Retry or send again. Partials are hidden `.name.….fdpart` files, pruned after 7 days.
+  - Optional **Verify data (CRC32)** per chunk (off by default).
+  - **Several devices:** ⌘-click (or right-click → *Select for Sending to Several*) to tick devices, then *Send to N devices*. They are sent to one after another.
 - **Spring motion everywhere,** with the animation reduced when *Reduce Motion* is on.
 
 ## Build
@@ -44,15 +51,22 @@ Macs don't support Wi‑Fi Direct. Use the same Wi‑Fi or the phone's hotspot i
 
 ```bash
 swift run fastdrop-cli hello <ip>
-swift run fastdrop-cli send <ip> file1 folder2 --streams 4
-swift run fastdrop-cli recv --dir ~/Downloads/FastDrop --auto
+swift run fastdrop-cli send <ip> file1 folder2 --streams 4 [--crc]
+swift run fastdrop-cli send <ip> --text "hello"
+swift run fastdrop-cli recv --dir ~/Downloads/FastDrop --accept ask|trusted|everyone   # --auto = everyone; --crc agrees to CRC32
+swift run fastdrop-cli trust list | trust remove <id>
 swift run fastdrop-cli scan
+swift run fastdrop-cli selftest        # protocol-2 test vectors; exits 1 on mismatch
 ```
+
+Test helpers: `--state-dir DIR` keeps the device id, trust keys and resume records in DIR, `--port N` uses another port,
+and `send --stop-after-mb N` aborts mid-transfer to test resume. `swift test` runs the same vectors with swift-testing.
 
 ## Layout
 
 ```
-Sources/FastDropCore/   protocol (Proto, Sock), Discovery, Receiver, Sender, Transfer — no UI
+Sources/FastDropCore/   protocol (Proto, Sock), Spec (protocol-2 math), Stores (trust, resume), Discovery, Receiver, Sender, Transfer — no UI
+Tests/FastDropCoreTests spec test vectors (swift-testing)
 Sources/FastDrop/       SwiftUI app: AppModel (single source of truth) + UI/
 Sources/FastDropCLI/    headless client
 scripts/                build-app.sh, make-icon.swift

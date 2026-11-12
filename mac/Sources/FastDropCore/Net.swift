@@ -114,7 +114,7 @@ public final class Identity: @unchecked Sendable {
 
     /// The HELLO answer and the body of discovery packets (Android `Hub.info()`).
     public func info(kind: String? = nil) -> [String: Any] {
-        var o: [String: Any] = ["app": "fastdrop", "v": 1, "id": id, "name": name, "type": type,
+        var o: [String: Any] = ["app": "fastdrop", "v": 2, "caps": Proto.caps, "id": id, "name": name, "type": type,
                                 "port": Int(port), "receivable": true]
         if let kind { o["kind"] = kind }
         return o
@@ -129,9 +129,13 @@ public struct Peer: Hashable, Sendable, Identifiable {
     public var ip: String
     public var port: UInt16
     public var manual: Bool
+    /// Protocol version the device announced in HELLO / discovery (1 when it sent none).
+    public var v: Int = 1
+    public var caps: [String] = []
 
-    public init(id: String, name: String, type: String, ip: String, port: UInt16, manual: Bool = false) {
+    public init(id: String, name: String, type: String, ip: String, port: UInt16, manual: Bool = false, v: Int = 1, caps: [String] = []) {
         self.id = id; self.name = name; self.type = type; self.ip = ip; self.port = port; self.manual = manual
+        self.v = v; self.caps = caps
     }
 
     init?(json o: [String: Any], ip: String, manual: Bool) {
@@ -146,7 +150,9 @@ public struct Peer: Hashable, Sendable, Identifiable {
                   type: type,
                   ip: ip,
                   port: (1...65535).contains(port) ? UInt16(port) : Proto.port,
-                  manual: manual)
+                  manual: manual,
+                  v: (o["v"] as? NSNumber)?.intValue ?? 1,
+                  caps: (o["caps"] as? [String]) ?? [])
     }
 }
 

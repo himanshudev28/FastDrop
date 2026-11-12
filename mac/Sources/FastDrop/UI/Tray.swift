@@ -75,12 +75,19 @@ struct BottomTray: View {
             VStack(alignment: .trailing, spacing: 8) {
                 HStack(spacing: 8) {
                     Button { model.chooseFiles() } label: { Label("Add", systemImage: "plus") }
-                    Button("Clear") { model.clearPicked() }
+                    Button("Clear") { model.clearPicked(); model.clearSelection() }
                 }
                 .buttonStyle(.bordered).controlSize(.small)
-                Label(model.devices.isEmpty ? "Waiting for a device…" : "Click a device to send",
-                      systemImage: model.devices.isEmpty ? "dot.radiowaves.left.and.right" : "arrow.up")
-                    .font(.caption).foregroundStyle(.secondary)
+                if model.selectedIDs.isEmpty {
+                    Label(model.devices.isEmpty ? "Waiting for a device…" : "Click a device to send",
+                          systemImage: model.devices.isEmpty ? "dot.radiowaves.left.and.right" : "arrow.up")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Button { model.sendToSelected() } label: {
+                        Label("Send to \(model.selectedIDs.count) device\(model.selectedIDs.count == 1 ? "" : "s")", systemImage: "paperplane.fill")
+                    }
+                    .buttonStyle(.borderedProminent).tint(Palette.sendA).controlSize(.small)
+                }
             }
         }
         .padding(.horizontal, 18).padding(.vertical, 10)

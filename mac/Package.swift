@@ -34,5 +34,8 @@ let package = Package(
 
         // Headless send / receive / hello, used to test the core against tools/fdtest.py and real phones.
         .executableTarget(name: "FastDropCLI", dependencies: ["FastDropCore"], swiftSettings: swift5),
+
+        // Spec test vectors (swift-testing). `swift test` — falls back to `fastdrop-cli selftest` if unavailable.
+        .testTarget(name: "FastDropCoreTests", dependencies: ["FastDropCore"], swiftSettings: swift5),
     ]
 )

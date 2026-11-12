@@ -17,6 +17,25 @@ struct PickedFile: Identifiable, Hashable {
 struct PendingSend: Equatable {
     let peer: Peer
     var status: String
+    /// 4-digit code the receiver shows too, so the user can confirm it's the right device.
+    var code: String?
+}
+
+/// A multi-device send: one normal transfer per device, one after another.
+struct Batch {
+    var peers: [Peer]
+    var urls: [URL]
+    var text: String?
+    var next = 0
+    var sent = 0
+    var stopped = false
+}
+
+/// The "Send Text" sheet: a text/link to send to `peer` (or one picked in the sheet).
+struct TextTarget: Identifiable {
+    let id = UUID()
+    var peer: Peer?
+    var initial = ""
 }
 
 /// A sampled view of the running transfer, refreshed ~10×/s while it runs.
@@ -44,6 +63,7 @@ struct HistoryItem: Codable, Identifiable, Hashable {
     let peer: String
     let outgoing: Bool
     let date: Date
+    var text: String? = nil   // text / link transfers (name is a short preview)
 }
 
 struct Toast: Identifiable, Equatable {
@@ -61,7 +81,9 @@ final class AppModel {
 
     var deviceName: String { didSet { identity.name = deviceName; defaults.set(deviceName, forKey: "deviceName") } }
     var streams: Int { didSet { defaults.set(streams, forKey: "streams") } }
-    var autoAccept: Bool { didSet { defaults.set(autoAccept, forKey: "autoAccept"); config.autoAccept = autoAccept } }
+    var acceptMode: AcceptMode { didSet { defaults.set(acceptMode.rawValue, forKey: "acceptMode"); config.acceptMode = acceptMode } }
+    /// Ask receivers to verify every chunk with CRC32 (off by default: it costs CPU and disables zero-copy sends).
+    var verifyCRC: Bool { didSet { defaults.set(verifyCRC, forKey: "verifyCRC") } }
     var saveFolder: URL { didSet { defaults.set(saveFolder.path, forKey: "saveFolder"); config.saveFolder = saveFolder } }
     var revealWhenDone: Bool { didSet { defaults.set(revealWhenDone, forKey: "revealWhenDone") } }
     var showMenuBarIcon: Bool { didSet { defaults.set(showMenuBarIcon, forKey: "showMenuBarIcon") } }
@@ -73,6 +95,11 @@ final class AppModel {
     private(set) var pending: PendingSend?
     private(set) var live: LiveTransfer?
     private(set) var offer: IncomingOffer?
+    private(set) var trustedDevices: [TrustedDevice] = []
+    /// Devices ticked for a multi-device send.
+    private(set) var selectedIDs: Set<String> = []
+    var composing: TextTarget?
+    private(set) var batchStatus: String?
     private(set) var history: [HistoryItem] = []
     private(set) var toast: Toast?
     private(set) var lanIPs: [String] = []
@@ -107,6 +134,9 @@ final class AppModel {
     private var lastSeen: [String: Date] = [:]
     private var job: SendJob?
     private var lastItems: [URL] = []
+    private var lastText: String?
+    private var batch: Batch?
+    private let stores = Stores.shared
     private var lastPeer: Peer?
     private var samples: [(Date, Int64)] = []
     private var ticker: Timer?
@@ -124,14 +154,20 @@ final class AppModel {
         identity = Identity(id: id, name: name, type: "laptop")
         deviceName = name
         streams = d.object(forKey: "streams") as? Int ?? 4
-        autoAccept = d.bool(forKey: "autoAccept")
+        // The old on/off switch becomes a 3-way setting: on -> Everyone, off -> Trusted devices.
+        let mode = d.string(forKey: "acceptMode").flatMap(AcceptMode.init(rawValue:))
+            ?? AcceptMode.migrated(legacyAutoAccept: d.bool(forKey: "autoAccept"))
+        d.set(mode.rawValue, forKey: "acceptMode")
+        acceptMode = mode
+        verifyCRC = d.bool(forKey: "verifyCRC")
         saveFolder = d.string(forKey: "saveFolder").map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/FastDrop", isDirectory: true)
         revealWhenDone = d.object(forKey: "revealWhenDone") as? Bool ?? false
         showMenuBarIcon = d.object(forKey: "showMenuBarIcon") as? Bool ?? true
-        config.autoAccept = autoAccept
+        config.acceptMode = mode
         config.saveFolder = saveFolder
         history = Self.loadHistory()
+        trustedDevices = Stores.shared.trust.list()
     }
 
     func start() {
@@ -151,7 +187,7 @@ final class AppModel {
 
         receiver = Receiver(identity: identity, gate: gate)
         let config = self.config
-        receiver.autoAccept = { config.autoAccept }
+        receiver.acceptMode = { config.acceptMode }
         receiver.saveDir = { config.saveFolder }
         receiver.present = { [weak self] offer in
             offer.onExpire = { [weak self] reason in
@@ -162,6 +198,9 @@ final class AppModel {
         receiver.onStart = { [weak self] t in DispatchQueue.main.async { self?.began(t, peerID: nil) } }
         receiver.onSaved = { [weak self] url, from, size in
             DispatchQueue.main.async { self?.saved(url, from: from, size: size) }
+        }
+        receiver.onText = { [weak self] text, from in
+            DispatchQueue.main.async { self?.receivedText(text, from: from) }
         }
         receiver.onListenError = { [weak self] e in DispatchQueue.main.async { self?.listenError = e } }
         receiver.start()
@@ -185,7 +224,7 @@ final class AppModel {
 
     // MARK: derived
 
-    var isBusy: Bool { pending != nil || live?.state == .running }
+    var isBusy: Bool { pending != nil || live?.state == .running || batch != nil }
     var activeDirectionOutgoing: Bool? {
         if pending != nil { return true }
         guard let l = live, l.state == .running else { return nil }
@@ -352,18 +391,23 @@ final class AppModel {
         if picked.isEmpty { chooseFiles(thenSendTo: peer) } else { send(to: peer, urls: picked.map(\.url)) }
     }
 
+    /// Sends files (or, with `text`, a text/link) to one device.
     @discardableResult
-    func send(to peer: Peer, urls: [URL]) -> Bool {
+    func send(to peer: Peer, urls: [URL], text: String? = nil) -> Bool {
         guard offer == nil else { showToast("Answer the incoming offer first", .info); return false }
-        guard !isBusy else { showToast("A transfer is already running", .info); return false }
-        let items = SendItem.expand(urls)
-        guard !items.isEmpty else { showToast("Nothing to send in that selection", .error); return false }
-        lastItems = urls; lastPeer = peer
-        let job = SendJob(peer: peer, items: items, identity: identity, gate: gate, streams: streams)
+        guard pending == nil, live?.state != .running else { showToast("A transfer is already running", .info); return false }
+        let items = text == nil ? SendItem.expand(urls) : []
+        guard text != nil || !items.isEmpty else { showToast("Nothing to send in that selection", .error); return false }
+        lastItems = urls; lastPeer = peer; lastText = text
+        let job = SendJob(peer: peer, items: items, text: text, identity: identity, gate: gate, streams: streams)
+        job.useCRC = verifyCRC
         self.job = job
         withAnimation(Motion.pop) { live = nil; pending = PendingSend(peer: peer, status: "Connecting to \(peer.name)…") }
         job.onStatus = { [weak self] s in
             DispatchQueue.main.async { if self?.pending != nil { self?.pending?.status = s } }
+        }
+        job.onCode = { [weak self] c in
+            DispatchQueue.main.async { if self?.pending != nil { self?.pending?.code = c } }
         }
         job.onStart = { [weak self] t in
             DispatchQueue.main.async { self?.began(t, peerID: peer.id) }
@@ -376,6 +420,7 @@ final class AppModel {
                 if let err {
                     withAnimation(Motion.pop) { self.pending = nil }
                     if err != "Cancelled" { self.showToast(err, .error) }
+                    self.batchStepDone(success: false, cancelled: err == "Cancelled")
                 }
             }
         }
@@ -383,13 +428,91 @@ final class AppModel {
     }
 
     func retry() {
-        guard let p = lastPeer, !lastItems.isEmpty else { return }
+        guard let p = lastPeer, !lastItems.isEmpty || lastText != nil else { return }
         let peer = devices.first { $0.id == p.id } ?? p
-        send(to: peer, urls: lastItems)
+        send(to: peer, urls: lastItems, text: lastText)   // same items + device: the receiver resumes where it stopped
+    }
+
+    func sendClipboard(to peer: Peer) {
+        guard let t = NSPasteboard.general.string(forType: .string), !t.isEmpty else {
+            showToast("The clipboard has no text", .info); return
+        }
+        sendText(t, to: peer)
+    }
+
+    func sendText(_ text: String, to peer: Peer) {
+        guard text.unicodeScalars.count <= Spec.maxText else { showToast("That text is too long (max 100,000 characters)", .error); return }
+        if peer.v < 2 { showToast("\(peer.name) needs FastDrop 2.1 or newer to receive text", .error); return }
+        send(to: peer, urls: [], text: text)
+    }
+
+    func composeText(for peer: Peer? = nil) { composing = TextTarget(peer: peer) }
+
+    // MARK: several devices
+
+    func toggleSelected(_ p: Peer) {
+        withAnimation(Motion.pop) {
+            if selectedIDs.contains(p.id) { selectedIDs.remove(p.id) } else { selectedIDs.insert(p.id) }
+        }
+    }
+    func clearSelection() { withAnimation(Motion.pop) { selectedIDs.removeAll() } }
+    var selectedPeers: [Peer] { devices.filter { selectedIDs.contains($0.id) } }
+
+    /// Sends the tray (or asks for files first) to every ticked device, one after another.
+    func sendToSelected() {
+        let peers = selectedPeers
+        guard !peers.isEmpty else { return }
+        if picked.isEmpty {
+            let panel = NSOpenPanel()
+            panel.allowsMultipleSelection = true; panel.canChooseDirectories = true; panel.canChooseFiles = true
+            panel.prompt = "Send"
+            panel.message = "Choose files or folders to send to \(peers.count) devices"
+            guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+            startBatch(peers, urls: panel.urls)
+        } else {
+            startBatch(peers, urls: picked.map(\.url))
+        }
+    }
+
+    func startBatch(_ peers: [Peer], urls: [URL], text: String? = nil) {
+        guard batch == nil, !isBusy, offer == nil else { showToast("A transfer is already running", .info); return }
+        batch = Batch(peers: peers, urls: urls, text: text)
+        clearSelection()
+        advanceBatch()
+    }
+
+    private func advanceBatch() {
+        guard var b = batch else { return }
+        guard !b.stopped, b.next < b.peers.count else { finishBatch(); return }
+        let peer = devices.first { $0.id == b.peers[b.next].id } ?? b.peers[b.next]
+        b.next += 1
+        batch = b
+        batchStatus = "Sending to \(b.next) of \(b.peers.count) devices"
+        if !send(to: peer, urls: b.urls, text: b.text) { batchStepDone(success: false, cancelled: false) }
+    }
+
+    /// One device of the batch finished (or failed to start).
+    private func batchStepDone(success: Bool, cancelled: Bool) {
+        guard var b = batch else { return }
+        if success { b.sent += 1 }
+        if cancelled { b.stopped = true }
+        batch = b
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(success ? 900 : 300))   // let the result card register
+            self?.advanceBatch()
+        }
+    }
+
+    private func finishBatch() {
+        guard let b = batch else { return }
+        batch = nil; batchStatus = nil
+        let n = b.peers.count
+        showToast("Sent to \(b.sent) of \(n) device\(n == 1 ? "" : "s")", b.sent == n ? .success : (b.sent == 0 ? .error : .info))
     }
 
     func cancelTransfer() {
         if let l = live, l.state == .running { l.transfer.cancel() } else { job?.cancel() }
+        if batch != nil { batch?.stopped = true }
     }
 
     func dismissTransfer() {
@@ -400,7 +523,7 @@ final class AppModel {
     // MARK: transfer lifecycle
 
     private func began(_ t: Transfer, peerID: String?) {
-        samples = [(Date(), 0)]
+        samples = [(Date(), t.done)]   // resumed bytes are already there: speed and ETA count only this session
         rxRows = 0
         withAnimation(Motion.pop) {
             pending = nil
@@ -447,9 +570,14 @@ final class AppModel {
         case .done:
             celebrations += 1
             if t.outgoing {
-                let label = t.fileCount == 1 ? (t.names.first ?? "1 file") : "\(t.fileCount) files"
-                record(HistoryItem(name: label, size: t.total, path: nil, peer: t.peerName, outgoing: true, date: Date()))
-                withAnimation(Motion.pop) { picked.removeAll { lastItems.contains($0.url) } }
+                if t.isText, let text = lastText {
+                    record(HistoryItem(name: Self.preview(text), size: Int64(text.utf8.count), path: nil, peer: t.peerName,
+                                       outgoing: true, date: Date(), text: text))
+                } else {
+                    let label = t.fileCount == 1 ? (t.names.first ?? "1 file") : "\(t.fileCount) files"
+                    record(HistoryItem(name: label, size: t.total, path: nil, peer: t.peerName, outgoing: true, date: Date()))
+                    withAnimation(Motion.pop) { picked.removeAll { lastItems.contains($0.url) } }
+                }
             } else {
                 if revealWhenDone { NSWorkspace.shared.activateFileViewerSelecting([saveFolder]) }
                 notifyIfInactive(title: "Received from \(t.peerName)", body: "\(t.fileCount) file\(t.fileCount == 1 ? "" : "s") · \(Fmt.bytes(t.total))")
@@ -466,6 +594,7 @@ final class AppModel {
         case .running:
             break
         }
+        if t.outgoing { batchStepDone(success: l.state == .done, cancelled: l.state == .cancelled) }
     }
 
     // MARK: receiving
@@ -475,13 +604,14 @@ final class AppModel {
         showScanner = false
         showAddDevice = false
         showQR = false
+        composing = nil
         withAnimation(Motion.pop) { offer = o }
         let wasActive = NSApp.isActive
         showMainWindow()
         if !wasActive {
             NSApp.requestUserAttention(.criticalRequest)
-            notifyIfInactive(title: "\(o.from) wants to send you files",
-                             body: "\(o.files.count) file\(o.files.count == 1 ? "" : "s") · \(Fmt.bytes(o.total))")
+            notifyIfInactive(title: o.text != nil ? "\(o.from) wants to send you text" : "\(o.from) wants to send you files",
+                             body: o.text.map { Self.preview($0) } ?? "\(o.files.count) file\(o.files.count == 1 ? "" : "s") · \(Fmt.bytes(o.total))")
         }
     }
 
@@ -496,10 +626,59 @@ final class AppModel {
         NSApp.activate()
     }
 
-    func respond(_ accept: Bool) {
+    func respond(_ accept: Bool, alwaysAccept: Bool = false) {
         guard let o = offer else { return }
-        o.respond(accept)
+        o.respond(accept, trust: alwaysAccept)
         withAnimation(Motion.pop) { offer = nil }
+        if accept && alwaysAccept {
+            // The receiver stores the key just before it replies; give it a moment, then refresh the list.
+            Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(400))
+                self?.refreshTrusted()
+                self?.showToast("\(o.from) is now trusted", .success)
+            }
+        }
+    }
+
+    // MARK: trusted devices
+
+    func refreshTrusted() { trustedDevices = stores.trust.list() }
+
+    func removeTrusted(_ d: TrustedDevice) {
+        stores.trust.remove(d.id)
+        withAnimation(Motion.pop) { refreshTrusted() }
+    }
+
+    // MARK: received text
+
+    nonisolated static func preview(_ text: String) -> String {
+        let one = text.split(whereSeparator: \.isNewline).joined(separator: " ")
+        return one.count > 80 ? String(one.prefix(80)) + "…" : one
+    }
+
+    static func url(in text: String) -> URL? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let u = URL(string: t), let sc = u.scheme?.lowercased(), sc == "http" || sc == "https", u.host != nil,
+              !t.contains(where: \.isWhitespace) else { return nil }
+        return u
+    }
+
+    private func receivedText(_ text: String, from: String) {
+        record(HistoryItem(name: Self.preview(text), size: Int64(text.utf8.count), path: nil, peer: from, outgoing: false,
+                           date: Date(), text: text))
+        showToast("Text from \(from) saved to History", .success)
+        notifyIfInactive(title: "Text from \(from)", body: Self.preview(text))
+        withAnimation(Motion.pop) { showHistory = true }
+    }
+
+    func copyText(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        showToast("Copied", .success)
+    }
+
+    func openLink(_ text: String) {
+        if let u = Self.url(in: text) { NSWorkspace.shared.open(u) }
     }
 
     private func offerExpired(_ o: IncomingOffer, senderLeft: Bool) {
@@ -588,11 +767,11 @@ final class AppModel {
 /// Settings the receiver's background threads read without touching the main actor.
 final class SharedConfig: @unchecked Sendable {
     private let lock = NSLock()
-    private var _autoAccept = false
+    private var _acceptMode = AcceptMode.trusted
     private var _saveFolder = URL(fileURLWithPath: NSHomeDirectory())
-    var autoAccept: Bool {
-        get { lock.lock(); defer { lock.unlock() }; return _autoAccept }
-        set { lock.lock(); _autoAccept = newValue; lock.unlock() }
+    var acceptMode: AcceptMode {
+        get { lock.lock(); defer { lock.unlock() }; return _acceptMode }
+        set { lock.lock(); _acceptMode = newValue; lock.unlock() }
     }
     var saveFolder: URL {
         get { lock.lock(); defer { lock.unlock() }; return _saveFolder }

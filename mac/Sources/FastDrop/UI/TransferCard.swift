@@ -39,6 +39,16 @@ struct TransferCard: View {
                     Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
                         .lineLimit(2).monospacedDigit()
                         .contentTransition(.numericText())
+                    if phase == .pending, let code = model.pending?.code {
+                        Text("Code \(code)").font(.system(.callout, design: .rounded, weight: .semibold)).monospacedDigit()
+                            .padding(.horizontal, 8).padding(.vertical, 2)
+                            .background(Capsule().fill(Color.primary.opacity(0.08)))
+                            .help("The other device shows the same code")
+                            .accessibilityLabel("Confirmation code \(code)")
+                    }
+                    if let status = model.batchStatus, phase == .pending || phase == .running {
+                        Text(status).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer(minLength: 8)
                 buttons
@@ -145,10 +155,13 @@ struct TransferCard: View {
     private var subtitle: String {
         guard let l = model.live, phase != .pending else { return model.pending?.status ?? "Connecting…" }
         let n = l.transfer.fileCount
-        let files = "\(n) file\(n == 1 ? "" : "s")"
+        let files = l.transfer.isText ? "Text" : "\(n) file\(n == 1 ? "" : "s")"
         switch phase {
-        case .running: return "\(files) · \(Fmt.bytes(l.done)) of \(Fmt.bytes(l.transfer.total))"
+        case .running:
+            let resumed = l.transfer.baseline > 0 ? "Resumed at \(Int(Double(l.transfer.baseline) * 100 / Double(max(1, l.transfer.total)))) % · " : ""
+            return "\(resumed)\(files) · \(Fmt.bytes(l.done)) of \(Fmt.bytes(l.transfer.total))"
         case .done:
+            if l.transfer.isText { return "Text sent" }
             let sp = l.speed > 1 ? " · \(Fmt.speed(l.speed)) avg" : ""
             return "\(files) · \(Fmt.bytes(l.transfer.total))\(sp)"
         default: return l.message.isEmpty ? "Transfer stopped" : l.message

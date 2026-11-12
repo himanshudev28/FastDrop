@@ -200,10 +200,18 @@ private struct HistoryRow: View {
             icon.frame(width: 32, height: 32)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name).lineLimit(1).truncationMode(.middle)
-                Text("\(item.outgoing ? "to" : "from") \(item.peer) · \(Fmt.bytes(item.size)) · \(item.date.formatted(.relative(presentation: .named)))")
+                Text("\(item.outgoing ? "to" : "from") \(item.peer) · \(item.text != nil ? "text" : Fmt.bytes(item.size)) · \(item.date.formatted(.relative(presentation: .named)))")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 4)
+            if let text = item.text {
+                Button { model.copyText(text) } label: { Image(systemName: "doc.on.doc") }
+                    .help("Copy").accessibilityLabel("Copy text")
+                if AppModel.url(in: text) != nil {
+                    Button { model.openLink(text) } label: { Image(systemName: "arrow.up.right.square") }
+                        .help("Open link").accessibilityLabel("Open link")
+                }
+            }
             Image(systemName: item.outgoing ? "arrow.up" : "arrow.down")
                 .font(.caption.weight(.bold))
                 .foregroundStyle(item.outgoing ? Palette.sendA : Palette.recvA)
@@ -213,6 +221,11 @@ private struct HistoryRow: View {
         .onTapGesture(count: 2) { open() }
         .accessibilityElement(children: .combine)
         .contextMenu {
+            if let text = item.text {
+                Button("Copy") { model.copyText(text) }
+                if AppModel.url(in: text) != nil { Button("Open") { model.openLink(text) } }
+                Divider()
+            }
             Button("Open") { open() }.disabled(!exists)
             Button("Show in Finder") {
                 if let u = fileURL { NSWorkspace.shared.activateFileViewerSelecting([u]) }
@@ -227,6 +240,9 @@ private struct HistoryRow: View {
             Image(systemName: "arrow.up.circle.fill")
                 .resizable().scaledToFit()
                 .foregroundStyle(Palette.send)
+        } else if item.text != nil {
+            Image(systemName: AppModel.url(in: item.text ?? "") != nil ? "link.circle.fill" : "text.bubble.fill")
+                .resizable().scaledToFit().foregroundStyle(Palette.receive)
         } else if let u = fileURL, exists {
             Image(nsImage: FileIcon.image(for: u)).resizable().scaledToFit()
         } else {
@@ -236,5 +252,65 @@ private struct HistoryRow: View {
 
     private func open() {
         if let u = fileURL, exists { NSWorkspace.shared.open(u) }
+        else if let t = item.text { model.openLink(t) }
+    }
+}
+
+/// "Send Text": a message or link, or the clipboard, to one device.
+struct TextComposer: View {
+    let target: TextTarget
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var text = ""
+    @State private var peerID = ""
+    @FocusState private var focused: Bool
+
+    private var capable: [Peer] { model.devices.filter { $0.v >= 2 } }
+    private var peer: Peer? { capable.first { $0.id == peerID } }
+    private var count: Int { text.unicodeScalars.count }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Send text or a link").font(.headline)
+            if capable.isEmpty {
+                Text("No nearby device supports text yet. Update FastDrop on the other device to 2.1 or newer.")
+                    .font(.callout).foregroundStyle(.secondary)
+            } else {
+                Picker("To", selection: $peerID) {
+                    ForEach(capable) { Text($0.name).tag($0.id) }
+                }
+            }
+            TextEditor(text: $text)
+                .font(.body)
+                .focused($focused)
+                .frame(minHeight: 120)
+                .scrollContentBackground(.hidden)
+                .padding(6)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.06)))
+                .accessibilityLabel("Text to send")
+            HStack {
+                Button { text = NSPasteboard.general.string(forType: .string) ?? text } label: {
+                    Label("Paste Clipboard", systemImage: "doc.on.clipboard")
+                }
+                Text("\(count.formatted()) / \(Spec.maxText.formatted())")
+                    .font(.caption).monospacedDigit()
+                    .foregroundStyle(count > Spec.maxText ? Palette.danger : .secondary)
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Send") {
+                    if let p = peer { model.sendText(text, to: p) }
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                .disabled(peer == nil || text.isEmpty || count > Spec.maxText)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+        .onAppear {
+            text = target.initial
+            peerID = target.peer.flatMap { p in capable.contains { $0.id == p.id } ? p.id : nil } ?? capable.first?.id ?? ""
+            focused = true
+        }
     }
 }

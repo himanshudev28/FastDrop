@@ -164,10 +164,15 @@ private struct DeviceBubble: View {
     @State private var targeted = false
 
     private var isLive: Bool { model.live?.peerID == peer.id && model.live?.state == .running }
+    private var selected: Bool { model.selectedIDs.contains(peer.id) }
     private var isPending: Bool { model.pending?.peer.id == peer.id }
 
     var body: some View {
-        Button { model.tap(peer) } label: {
+        Button {
+            // With devices ticked (or ⌘-click) a click selects; otherwise it sends.
+            if !model.selectedIDs.isEmpty || NSEvent.modifierFlags.contains(.command) { model.toggleSelected(peer) }
+            else { model.tap(peer) }
+        } label: {
             VStack(spacing: 6) {
                 avatar
                 Text(targeted ? "Drop to send" : peer.name)
@@ -187,6 +192,10 @@ private struct DeviceBubble: View {
         } isTargeted: { targeted = $0 }
         .contextMenu {
             Button("Send Files…") { model.chooseFiles(thenSendTo: peer) }
+            Button("Send Text…") { model.composeText(for: peer) }.disabled(peer.v < 2)
+            Button("Send Clipboard") { model.sendClipboard(to: peer) }.disabled(peer.v < 2)
+            Divider()
+            Button(selected ? "Deselect" : "Select for Sending to Several") { model.toggleSelected(peer) }
             Button("Copy IP Address") { model.copyIP(peer) }
             if peer.manual { Button("Forget Device") { model.forget(peer) } }
         }
@@ -195,6 +204,7 @@ private struct DeviceBubble: View {
         .accessibilityLabel("Send to \(peer.name)")
         .accessibilityValue("\(DeviceGlyph.label(forType: peer.type)), \(peer.ip)")
         .accessibilityHint("Drop files here or click to choose files")
+        .accessibilityValue(selected ? "Selected" : "")
         .accessibilityAddTraits(.isButton)
     }
 
@@ -205,6 +215,13 @@ private struct DeviceBubble: View {
                 .font(.system(size: 26, weight: .medium)).foregroundStyle(.white)
             if targeted {
                 Circle().strokeBorder(.white, lineWidth: 3)
+            }
+            if selected {
+                Circle().strokeBorder(.white, lineWidth: 3)
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.title3).symbolRenderingMode(.palette).foregroundStyle(.white, Palette.blue)
+                    .offset(x: 24, y: -24)
+                    .transition(.scale.combined(with: .opacity))
             }
             if isLive, let live = model.live {
                 Circle().trim(from: 0, to: live.fraction)
