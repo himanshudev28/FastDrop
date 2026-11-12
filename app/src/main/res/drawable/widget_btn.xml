@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Send: flat orange block -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="#3A4156" />
-    <corners android:radius="14dp" />
+    <solid android:color="@color/widget_send" />
+    <corners android:radius="6dp" />
 </shape>

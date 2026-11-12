@@ -68,6 +68,9 @@ object Integrations {
     fun buildViews(ctx: Context, status: String): RemoteViews {
         val v = RemoteViews(ctx.packageName, R.layout.widget_fastdrop)
         v.setTextViewText(R.id.widget_status, status)
+        // Flat fills live in the layout (Send orange / dark text, Receive ultramarine / white text).
+        v.setContentDescription(R.id.widget_send, "Send")
+        v.setContentDescription(R.id.widget_receive, "Receive")
         v.setOnClickPendingIntent(R.id.widget_send, openApp(ctx, OPEN_SEND, 31))
         v.setOnClickPendingIntent(R.id.widget_receive, openApp(ctx, OPEN_RECEIVE, 32))
         return v
@@ -110,9 +113,9 @@ class FastDropTileService : TileService() {
         val tile = qsTile ?: return
         val on = Hub.ready && Hub.receivable()
         tile.state = if (on) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
-        tile.label = "FastDrop: receive"
-        if (Build.VERSION.SDK_INT >= 29) tile.subtitle = if (on) "Visible" else "Tap to receive"
-        try { tile.icon = android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_receive) } catch (_: Exception) { }
+        tile.label = "FastDrop"
+        if (Build.VERSION.SDK_INT >= 29) tile.subtitle = if (on) "Visible" else "Off"
+        try { tile.icon = android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_tile) } catch (_: Exception) { }
         tile.updateTile()
     }
 

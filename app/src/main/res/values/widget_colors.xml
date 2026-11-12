@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Widget colours (DESIGN 4.12): neutral body follows the system theme, job fills are the same in both. -->
+<resources>
+    <color name="widget_surface">#FBFAF7</color>
+    <color name="widget_line">#D9D5CC</color>
+    <color name="widget_ink">#161513</color>
+    <color name="widget_ink2">#5B5852</color>
+    <color name="widget_send">#FF5A1F</color>
+    <color name="widget_on_send">#161513</color>
+    <color name="widget_receive">#2E3BFF</color>
+    <color name="widget_on_receive">#FFFFFF</color>
+</resources>
