@@ -19,7 +19,6 @@ class ReceiveScreen(host: MainActivity) : Screen(host) {
     private var lastBlipSig = ""
     private var lastDetailsSig = ""
 
-    private lateinit var radar: RadarView
     private lateinit var statusDot: View
     private lateinit var statusText: TextView
     private lateinit var statusSub: TextView
@@ -43,8 +42,6 @@ class ReceiveScreen(host: MainActivity) : Screen(host) {
         val wide = Ui.wide(ctx)
         val root = FrameLayout(ctx)
         root.setBackgroundColor(Theme.BG)
-        root.addView(Backdrop(ctx).apply { colors = intArrayOf(Theme.RECV_A, Theme.RECV_B, Theme.ACCENT_2) },
-            FrameLayout.LayoutParams(-1, -1))
 
         val content = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         content.addView(Ui.header(ctx, "Receive", { host.pop() }), lp(bottomDp = 6))
@@ -76,7 +73,7 @@ class ReceiveScreen(host: MainActivity) : Screen(host) {
             content.addView(buttons, lp())
             sections = listOf(hero, qrCard, note, detailsCard, buttons)
         }
-        root.addView(Ui.scrollPage(ctx, content), FrameLayout.LayoutParams(-1, -1))
+        root.addView(Ui.scrollPage(ctx, content, gutter = true), FrameLayout.LayoutParams(-1, -1))
         refresh()
         return root
     }
@@ -85,16 +82,11 @@ class ReceiveScreen(host: MainActivity) : Screen(host) {
 
     private fun buildHero(): View {
         val box = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
-        val h = ScreenKit.dp(ctx, if (Ui.wide(ctx)) 300 else 230)
-        val radarBox = FrameLayout(ctx)
-        radar = RadarView(ctx).apply { colors = Theme.RECEIVE }
-        radarBox.addView(radar, FrameLayout.LayoutParams(-1, h))
-        val av = Ui.avatar(ctx, Hub.myName, Hub.myType, 56, Theme.RECEIVE)
-        radarBox.addView(av, FrameLayout.LayoutParams(ScreenKit.dp(ctx, 56), ScreenKit.dp(ctx, 56), Gravity.CENTER))
-        box.addView(radarBox, lp(bottomDp = 8))
+        val pl = Theme.plateFor(Hub.myType)
+        box.addView(Ui.plate(ctx, Ui.glyphFor(Hub.myType), pl.fill, pl.on, 56), lp(w = ScreenKit.dp(ctx, 56), h = ScreenKit.dp(ctx, 56), bottomDp = 12))
 
         val line = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-        statusDot = Ui.dot(ctx, Theme.WARNING, 10)
+        statusDot = Ui.led(ctx, Led.OFF)
         line.addView(statusDot, LinearLayout.LayoutParams(ScreenKit.dp(ctx, 10), ScreenKit.dp(ctx, 10)).apply {
             marginEnd = ScreenKit.dp(ctx, 10)
         })
@@ -107,16 +99,16 @@ class ReceiveScreen(host: MainActivity) : Screen(host) {
     }
 
     private fun buildSameWifiNote(): View {
-        val card = Ui.card(ctx, 4)
-        card.addView(Ui.row(ctx, R.drawable.ic_wifi, Theme.SUCCESS, "On the same Wi‑Fi?",
+        val card = Ui.column(ctx)
+        card.addView(Ui.row(ctx, R.drawable.ic_wifi, "On the same Wi‑Fi?",
             "Nearby phones see you automatically. No code needed.", null, null),
             LinearLayout.LayoutParams(ScreenKit.MATCH, ScreenKit.WRAP))
         return card
     }
 
     private fun buildPermBanner(): View {
-        val card = Ui.card(ctx, 4)
-        card.addView(Ui.row(ctx, R.drawable.ic_wifi_direct, Theme.WARNING, "Allow Nearby devices",
+        val card = Ui.column(ctx)
+        card.addView(Ui.row(ctx, R.drawable.ic_wifi_direct, "Allow Nearby devices",
             "Needed to link phones without a router.", null) {
             if (Links.approximateOnly(ctx)) { openAppSettings(); return@row }
             host.ensureLinkPermissions(explicit = true) { ok -> if (ok) startHosting() else refresh() }
@@ -126,7 +118,7 @@ class ReceiveScreen(host: MainActivity) : Screen(host) {
     }
 
     private fun buildQrCard(): View {
-        val card = Ui.card(ctx, 20).apply { gravity = Gravity.CENTER_HORIZONTAL }
+        val card = Ui.column(ctx).apply { gravity = Gravity.CENTER_HORIZONTAL }
         val seg = Ui.segmented(ctx, listOf("FastDrop app", "Other devices"), 0) { i ->
             qrMode = i
             refresh()
@@ -146,14 +138,14 @@ class ReceiveScreen(host: MainActivity) : Screen(host) {
     }
 
     private fun buildDetails() {
-        detailsCard = Ui.card(ctx, 8)
-        detailsCard.addView(Ui.label(ctx, "Network details").apply {
+        detailsCard = Ui.column(ctx)
+        detailsCard.addView(Ui.section(ctx, "Network details").apply {
             setPadding(ScreenKit.dp(ctx, 14), ScreenKit.dp(ctx, 10), 0, ScreenKit.dp(ctx, 2))
         })
         val copySsid = Ui.iconButton(ctx, R.drawable.ic_copy, "Copy network name") {
             Links.hostInfo().ssid?.let { host.copyText("Network", it) }
         }
-        ssidRow = Ui.row(ctx, R.drawable.ic_wifi_direct, Theme.ACCENT_2, "Network", " ", copySsid, null)
+        ssidRow = Ui.row(ctx, R.drawable.ic_wifi_direct, "Network", " ", copySsid, null)
         revealBtn = Ui.iconButton(ctx, R.drawable.ic_eye, "Show password") {
             showPass = !showPass
             refreshDetails(force = true)
@@ -165,11 +157,11 @@ class ReceiveScreen(host: MainActivity) : Screen(host) {
         val sz = revealBtn.layoutParams.width
         passBtns.addView(revealBtn, LinearLayout.LayoutParams(sz, sz).apply { marginEnd = ScreenKit.dp(ctx, 8) })
         passBtns.addView(copyPass, LinearLayout.LayoutParams(sz, sz))
-        passRow = Ui.row(ctx, R.drawable.ic_shield, Theme.WARNING, "Password", " ", passBtns, null)
+        passRow = Ui.row(ctx, R.drawable.ic_shield, "Password", " ", passBtns, null)
         val copyIp = Ui.iconButton(ctx, R.drawable.ic_copy, "Copy address") {
             Net.primaryIp()?.let { host.copyText("Address", it) }
         }
-        ipRow = Ui.row(ctx, R.drawable.ic_link, Theme.SUCCESS, "Your address", " ", copyIp, null)
+        ipRow = Ui.row(ctx, R.drawable.ic_link, "Your address", " ", copyIp, null)
         for (r in listOf(ssidRow, passRow, ipRow)) {
             detailsCard.addView(r, LinearLayout.LayoutParams(ScreenKit.MATCH, ScreenKit.WRAP))
         }
@@ -178,11 +170,11 @@ class ReceiveScreen(host: MainActivity) : Screen(host) {
     private fun buildButtons(): View {
         val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         if (QrScanActivity.hasCamera(ctx)) {
-            val b = Ui.primaryButton(ctx, "Scan sender's QR", Theme.RECEIVE, R.drawable.ic_scan) { host.scanQr(false) }
+            val b = Ui.jobButton(ctx, "Scan sender's QR", Job.RECEIVE, R.drawable.ic_scan) { host.scanQr(false) }
             col.addView(b, lp(bottomDp = 12))
             firstBtn = b
         }
-        val card = Ui.card(ctx, 4)
+        val card = Ui.column(ctx)
         card.addView(Ui.toggleRow(ctx, "Auto-accept", "Save incoming files without asking", Hub.autoAccept) {
             Hub.autoAccept = it
         }, LinearLayout.LayoutParams(ScreenKit.MATCH, ScreenKit.WRAP))
@@ -199,18 +191,15 @@ class ReceiveScreen(host: MainActivity) : Screen(host) {
 
     override fun onShow() {
         shown = true
-        radar.start()
         if (Links.hasPermissions(ctx)) startHosting() else host.ensureLinkPermissions { startHosting() }
         refresh()
         if (!entered) {
             entered = true
-            Anim.stagger(sections, 40)
         }
     }
 
     override fun onHide() {
         shown = false
-        radar.stop()
         Links.stopHosting("receive")
     }
 
@@ -221,7 +210,7 @@ class ReceiveScreen(host: MainActivity) : Screen(host) {
     // ---------------------------------------------------------------- refresh
 
     override fun refresh() {
-        if (!::radar.isInitialized) return
+        if (!::statusDot.isInitialized) return
         val st = ScreenKit.hostStatus(ctx)
         ScreenKit.fadeText(statusText, st.first)
         statusDot.background = android.graphics.drawable.GradientDrawable().apply {
@@ -234,13 +223,6 @@ class ReceiveScreen(host: MainActivity) : Screen(host) {
         }
         ScreenKit.fadeText(statusSub, sub)
 
-        // Devices that already see us on the same network show up as blips.
-        val devs = Hub.devices.values.filter { it.via == Device.VIA_LAN }.sortedBy { it.id }
-        val sig = devs.joinToString("|") { it.id + it.name }
-        if (sig != lastBlipSig) {
-            lastBlipSig = sig
-            radar.setBlips(devs.map { RadarView.Blip(it.id, it.name, it.type, Theme.RECV_A) })
-        }
         ScreenKit.setShown(permBanner, Links.p2pSupported(ctx) && Links.requiredPermissions().isNotEmpty() && !Links.hasPermissions(ctx))
         if (Links.approximateOnly(ctx)) Ui.setRowText(permBanner, "Choose Precise location", "Wi-Fi Direct needs Precise location. Tap to open settings.")
         refreshQr()

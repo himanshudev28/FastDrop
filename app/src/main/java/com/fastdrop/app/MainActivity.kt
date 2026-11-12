@@ -38,7 +38,6 @@ class MainActivity : Activity(), Hub.Listener {
 
     /** Host for screens, sheets and snackbars. */
     lateinit var root: FrameLayout
-    private lateinit var backdrop: Backdrop
     private lateinit var container: FrameLayout
     private lateinit var transferUi: TransferUi
 
@@ -63,16 +62,16 @@ class MainActivity : Activity(), Hub.Listener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Hub.init(applicationContext)
+        Theme.resolve(this)
         Hub.listener = this
         TransferService.start(this)
 
         root = FrameLayout(this).apply { setBackgroundColor(Theme.BG) }
-        backdrop = Backdrop(this)
         container = FrameLayout(this)
-        root.addView(backdrop, FrameLayout.LayoutParams(-1, -1))
         root.addView(container, FrameLayout.LayoutParams(-1, -1))
         setupWindow()
         setContentView(root)
+        Theme.applyWindow(this)
 
         transferUi = TransferUi(this)
         registerBack()
@@ -98,6 +97,9 @@ class MainActivity : Activity(), Hub.Listener {
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
+        Theme.resolve(this)
+        Theme.applyWindow(this)
+        root.setBackgroundColor(Theme.BG)
         // Rebuild the visible screen for the new size; its state lives in its fields.
         val s = current ?: return
         views.remove(s)?.let { container.removeView(it) }
@@ -253,7 +255,7 @@ class MainActivity : Activity(), Hub.Listener {
     private val tick = object : Runnable {
         override fun run() {
             refreshAll(ticked = true)
-            if (needsTick()) Hub.main.postDelayed(this, 400) else ticking = false
+            if (needsTick()) Hub.main.postDelayed(this, 250) else ticking = false
         }
     }
 
@@ -262,7 +264,7 @@ class MainActivity : Activity(), Hub.Listener {
     private fun ensureTick() {
         if (ticking || !needsTick()) return
         ticking = true
-        Hub.main.postDelayed(tick, 400)
+        Hub.main.postDelayed(tick, 250)
     }
 
     private fun refreshAll(ticked: Boolean = false) {
@@ -496,8 +498,8 @@ class MainActivity : Activity(), Hub.Listener {
             onResult(ok)
         }
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        col.addView(Ui.title(this, title, 22f))
-        col.addView(Ui.text(this, body, 15f, Theme.MUTED).apply {
+        col.addView(Ui.text(this, title, Type.TITLE))
+        col.addView(Ui.text(this, body, Type.BODY, Theme.INK_2).apply {
             setPadding(0, Theme.dp(this@MainActivity, 8), 0, Theme.dp(this@MainActivity, 20))
         })
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -505,7 +507,7 @@ class MainActivity : Activity(), Hub.Listener {
             row.addView(Ui.secondaryButton(this, negative) { answer(false) },
                 LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = Theme.dp(this@MainActivity, 10) })
         }
-        val pos = Ui.primaryButton(this, positive) { answer(true) }
+        val pos = Ui.jobButton(this, positive, Job.SEND) { answer(true) }
         row.addView(pos, LinearLayout.LayoutParams(0, -2, 1f))
         col.addView(row)
         val handle = Sheets.show(root, col, true) {
@@ -527,7 +529,7 @@ class MainActivity : Activity(), Hub.Listener {
             setPadding(Theme.dp(this@MainActivity, 20), Theme.dp(this@MainActivity, 8), Theme.dp(this@MainActivity, 20), 0)
             addView(edit, LinearLayout.LayoutParams(-1, -2))
         }
-        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+        AlertDialog.Builder(this, if (Theme.dark) android.R.style.Theme_Material_Dialog_Alert else android.R.style.Theme_Material_Light_Dialog_Alert)
             .setTitle(title).setView(box)
             .setPositiveButton("OK") { _, _ ->
                 val v = edit.text.toString().trim()

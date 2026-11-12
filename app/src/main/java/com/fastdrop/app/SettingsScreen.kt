@@ -46,14 +46,14 @@ class SettingsScreen(host: MainActivity) : Screen(host) {
         add(Ui.header(c, "Settings", { host.pop() }), 4)
 
         // This device
-        add(Ui.label(c, "This device"), 8)
-        nameBox = Ui.card(c, 6)
+        add(Ui.section(c, "This device"), 8)
+        nameBox = Ui.column(c)
         add(nameBox)
         renderName()
 
         // Receiving
-        add(Ui.label(c, "Receiving"), 8)
-        val recv = Ui.card(c, 6)
+        add(Ui.section(c, "Receiving"), 8)
+        val recv = Ui.column(c)
         val autoBox = LinearLayout(c).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(10), dp(12), dp(12))
@@ -69,14 +69,14 @@ class SettingsScreen(host: MainActivity) : Screen(host) {
         add(recv)
 
         // Trusted devices
-        add(Ui.label(c, "Trusted devices"), 8)
-        trustBox = Ui.card(c, 6)
+        add(Ui.section(c, "Trusted devices"), 8)
+        trustBox = Ui.column(c)
         add(trustBox)
         renderTrusted()
 
         // Speed
-        add(Ui.label(c, "Speed"), 8)
-        val speed = Ui.card(c, 6)
+        add(Ui.section(c, "Speed"), 8)
+        val speed = Ui.column(c)
         val streamsBox = LinearLayout(c).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(10), dp(12), dp(12))
@@ -87,47 +87,46 @@ class SettingsScreen(host: MainActivity) : Screen(host) {
         val sel = STREAM_OPTIONS.indexOf(Hub.streams).let { if (it < 0) 2 else it }
         streamsBox.addView(Ui.segmented(c, STREAM_OPTIONS.map { it.toString() }, sel) { Hub.streams = STREAM_OPTIONS[it] }, lp())
         speed.addView(streamsBox, lp())
-        speed.addView(Ui.divider(c))
+        speed.addView(Ui.rule(c))
         speed.addView(Ui.toggleRow(c, "Verify data (CRC32)",
             "Checks every chunk. Slower: uses more CPU on both devices.", Hub.verifyCrc) { Hub.verifyCrc = it }, lp())
         if (Links.p2pSupported(c)) {
-            speed.addView(Ui.divider(c))
+            speed.addView(Ui.rule(c))
             speed.addView(Ui.toggleRow(c, "Wi-Fi Direct on 5 GHz",
                 "Faster direct links. Turn off if connections fail.", Hub.prefer5Ghz) { Hub.prefer5Ghz = it }, lp())
         }
         add(speed)
 
         // Apps
-        add(Ui.label(c, "Apps"), 8)
-        val apps = Ui.card(c, 6)
+        add(Ui.section(c, "Apps"), 8)
+        val apps = Ui.column(c)
         apps.addView(Ui.toggleRow(c, "Show system apps",
             "Include built-in apps when you pick apps to send.", Hub.showSystemApps) { Hub.showSystemApps = it }, lp())
-        apps.addView(Ui.divider(c))
-        apps.addView(Ui.row(c, R.drawable.ic_share, Theme.WEB_A, "Share FastDrop app",
+        apps.addView(Ui.rule(c))
+        apps.addView(Ui.row(c, R.drawable.ic_share, "Share FastDrop app",
             "Give the app to any phone through a web page", Ui.icon(c, R.drawable.ic_chevron, Theme.MUTED, 18)) {
             host.showWebShare(true)
         }, lp())
         add(apps)
 
         // Permissions
-        add(Ui.label(c, "Permissions"), 8)
-        permBox = Ui.card(c, 6)
+        add(Ui.section(c, "Permissions"), 8)
+        permBox = Ui.column(c)
         add(permBox)
         renderPerms()
 
         // About
-        add(Ui.label(c, "About"), 8)
-        val about = Ui.card(c, 6)
-        about.addView(Ui.row(c, R.drawable.ic_bolt, Theme.ACCENT, "FastDrop", "Version ${versionName()}", null, null), lp())
-        about.addView(Ui.divider(c))
-        about.addView(Ui.row(c, R.drawable.ic_folder, Theme.CAT_FILES, "Saved files", "Files save to Download/FastDrop", null, null), lp())
-        about.addView(Ui.divider(c))
-        about.addView(Ui.row(c, R.drawable.ic_wifi_direct, Theme.ACCENT_2, "Wi-Fi Direct",
+        add(Ui.section(c, "About"), 8)
+        val about = Ui.column(c)
+        about.addView(Ui.row(c, R.drawable.ic_bolt, "FastDrop", "Version ${versionName()}", null, null), lp())
+        about.addView(Ui.rule(c))
+        about.addView(Ui.row(c, R.drawable.ic_folder, "Saved files", "Files save to Download/FastDrop", null, null), lp())
+        about.addView(Ui.rule(c))
+        about.addView(Ui.row(c, R.drawable.ic_wifi_direct, "Wi-Fi Direct",
             if (Links.p2pSupported(c)) "Supported on this device" else "Not supported. Same Wi-Fi still works", null, null), lp())
         add(about, 8)
 
-        Anim.stagger(blocks, 40, 40)
-        return Ui.scrollPage(c, content)
+        return Ui.scrollPage(c, content, gutter = true)
     }
 
     private fun versionName(): String = try {
@@ -153,13 +152,13 @@ class SettingsScreen(host: MainActivity) : Screen(host) {
         }
         val fmt = android.text.format.DateFormat.getMediumDateFormat(c)
         list.forEachIndexed { i, e ->
-            if (i > 0) trustBox.addView(Ui.divider(c))
+            if (i > 0) trustBox.addView(Ui.rule(c))
             val remove = Ui.secondaryButton(c, "Remove") {
                 Trust.remove(e.dev)
                 renderTrusted()
                 Hub.changed()
             }
-            trustBox.addView(Ui.row(c, R.drawable.ic_shield, Theme.SUCCESS, e.name,
+            trustBox.addView(Ui.row(c, R.drawable.ic_shield, e.name,
                 "Added ${fmt.format(java.util.Date(e.added))}", remove, null), lp())
         }
     }
@@ -169,7 +168,7 @@ class SettingsScreen(host: MainActivity) : Screen(host) {
     private fun renderName() {
         val c = ctx
         val icon = if (Hub.isTv) R.drawable.ic_tv else R.drawable.ic_phone
-        val row = Ui.row(c, icon, Theme.ACCENT, "Device name", Hub.myName,
+        val row = Ui.row(c, icon, "Device name", Hub.myName,
             Ui.icon(c, R.drawable.ic_edit, Theme.MUTED, 20)) {
             host.inputDialog("Device name", Hub.myName, InputType.TYPE_CLASS_TEXT) { name ->
                 Hub.myName = name
@@ -261,12 +260,11 @@ class SettingsScreen(host: MainActivity) : Screen(host) {
         val c = ctx
         permBox.removeAllViews()
         list.forEachIndexed { i, p ->
-            if (i > 0) permBox.addView(Ui.divider(c))
-            val chip = if (p.granted) Ui.chip(c, "Allowed", Theme.SUCCESS, R.drawable.ic_check)
-            else Ui.chip(c, "Allow", Theme.ACCENT)
+            if (i > 0) permBox.addView(Ui.rule(c))
+            val chip = Ui.tag(c, if (p.granted) "Allowed" else "Allow")
             permBox.addView(
-                Ui.row(c, p.icon, if (p.granted) Theme.SUCCESS else Theme.ACCENT, p.title, p.sub, chip,
-                    if (p.granted) null else p.grant), lp())
+                Ui.row(c, p.icon, p.title, p.sub, chip,
+                    onClick = if (p.granted) null else p.grant), lp())
         }
     }
 

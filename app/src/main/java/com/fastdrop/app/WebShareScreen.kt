@@ -61,8 +61,6 @@ class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Scre
         val wide = Ui.wide(ctx)
         val root = FrameLayout(ctx)
         root.setBackgroundColor(Theme.BG)
-        root.addView(Backdrop(ctx).apply { colors = intArrayOf(Theme.WEB_A, Theme.WEB_B, Theme.ACCENT) },
-            FrameLayout.LayoutParams(-1, -1))
 
         val content = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         content.addView(Ui.header(ctx, "Share with any device", { stopAndLeave() }), lp(bottomDp = 6))
@@ -91,7 +89,7 @@ class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Scre
             content.addView(stats, lp()); content.addView(stop, lp())
             sections = listOf(intro, step1, step2, stats, stop)
         }
-        root.addView(Ui.scrollPage(ctx, content), FrameLayout.LayoutParams(-1, -1))
+        root.addView(Ui.scrollPage(ctx, content, gutter = true), FrameLayout.LayoutParams(-1, -1))
         refresh()
         return root
     }
@@ -99,7 +97,7 @@ class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Scre
     // ---------------------------------------------------------------- pieces
 
     private fun buildIntro(): View {
-        val card = Ui.card(ctx, 18)
+        val card = Ui.column(ctx)
         introTitle = Ui.text(ctx, "Starting…", 18f, Theme.TEXT, Theme.BOLD)
         introSub = Ui.text(ctx, "", 13f, Theme.MUTED).apply { setPadding(0, ScreenKit.dp(ctx, 4), 0, 0) }
         card.addView(introTitle); card.addView(introSub)
@@ -107,11 +105,11 @@ class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Scre
     }
 
     private fun buildError(): View {
-        val card = Ui.card(ctx, 18)
+        val card = Ui.column(ctx)
         card.addView(Ui.text(ctx, "Couldn't start sharing", 17f, Theme.DANGER, Theme.BOLD))
         card.addView(Ui.text(ctx, "Port ${WebShare.PORT} is busy. Close other sharing apps and try again.", 13f, Theme.MUTED)
             .apply { setPadding(0, ScreenKit.dp(ctx, 4), 0, ScreenKit.dp(ctx, 12)) })
-        card.addView(Ui.primaryButton(ctx, "Try again", Theme.WEB, R.drawable.ic_refresh) { startWeb() })
+        card.addView(Ui.jobButton(ctx, "Try again", Job.WEB, R.drawable.ic_refresh) { startWeb() })
         card.visibility = View.GONE
         return card
     }
@@ -120,10 +118,10 @@ class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Scre
         text = n.toString()
         textSize = 14f
         typeface = Theme.BOLD
-        setTextColor(android.graphics.Color.WHITE)
+        setTextColor(Theme.ON_DARK)
         gravity = Gravity.CENTER
         includeFontPadding = false
-        background = GradientDrawable(GradientDrawable.Orientation.TL_BR, Theme.WEB).apply { shape = GradientDrawable.OVAL }
+        background = GradientDrawable().apply { setColor(Theme.C_WEB); cornerRadius = Theme.dp(ctx, 6).toFloat() }
     }
 
     private fun stepHeader(n: Int, title: String, sub: String): View {
@@ -148,17 +146,17 @@ class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Scre
     }
 
     private fun buildStep1(): View {
-        val card = Ui.card(ctx, 18)
+        val card = Ui.column(ctx)
         card.addView(stepHeader(1, "Join this Wi‑Fi", "Scan with the other device's camera. Skip if it is already on your Wi‑Fi."))
         wifiQrView = qrBox(card)
         val copySsid = Ui.iconButton(ctx, R.drawable.ic_copy, "Copy network name") {
             Links.hostInfo().ssid?.let { host.copyText("Network", it) }
         }
-        ssidRow = Ui.row(ctx, R.drawable.ic_wifi_direct, Theme.ACCENT_2, "Network", " ", copySsid, null)
+        ssidRow = Ui.row(ctx, R.drawable.ic_wifi_direct, "Network", " ", copySsid, null)
         val copyPass = Ui.iconButton(ctx, R.drawable.ic_copy, "Copy password") {
             Links.hostInfo().pass?.let { host.copyText("Password", it) }
         }
-        passRow = Ui.row(ctx, R.drawable.ic_shield, Theme.WARNING, "Password", " ", copyPass, null)
+        passRow = Ui.row(ctx, R.drawable.ic_shield, "Password", " ", copyPass, null)
         card.addView(ssidRow, LinearLayout.LayoutParams(ScreenKit.MATCH, ScreenKit.WRAP))
         card.addView(passRow, LinearLayout.LayoutParams(ScreenKit.MATCH, ScreenKit.WRAP))
         card.visibility = View.GONE
@@ -166,7 +164,7 @@ class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Scre
     }
 
     private fun buildStep2(): View {
-        val card = Ui.card(ctx, 18)
+        val card = Ui.column(ctx)
         card.addView(stepHeader(2, "Open in browser", "Scan this, or type the address."))
         urlQrView = qrBox(card)
         urlText = Ui.text(ctx, "Starting…", 16f, Theme.TEXT, Theme.BOLD).apply {
@@ -192,8 +190,8 @@ class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Scre
     }
 
     private fun buildStats(): View {
-        val card = Ui.card(ctx, 18)
-        card.addView(Ui.label(ctx, "Live"), lp(bottomDp = 10))
+        val card = Ui.column(ctx)
+        card.addView(Ui.section(ctx, "Live"), lp(bottomDp = 10))
         val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
         val a = statCell("Downloads"); val b = statCell("Uploads"); val c = statCell("Sent"); val d = statCell("Received")
         dlNum = a.second; ulNum = b.second; outNum = c.second; inNum = d.second
@@ -247,7 +245,6 @@ class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Scre
         refresh()
         if (!entered) {
             entered = true
-            Anim.stagger(sections, 40)
         }
     }
 
@@ -314,8 +311,8 @@ class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Scre
     private fun refreshStats() {
         val dl = WebShare.downloads.toLong()
         val ul = WebShare.uploads.toLong()
-        if (dl != lastDl) { Anim.countTo(dlNum, lastDl, dl) { it.toString() }; lastDl = dl }
-        if (ul != lastUl) { Anim.countTo(ulNum, lastUl, ul) { it.toString() }; lastUl = ul }
+        if (dl != lastDl) { dlNum.text = dl.toString(); lastDl = dl }
+        if (ul != lastUl) { ulNum.text = ul.toString(); lastUl = ul }
         outNum.text = Io.bytes(WebShare.bytesOut)
         inNum.text = Io.bytes(WebShare.bytesIn)
 
@@ -335,7 +332,7 @@ class WebShareScreen(host: MainActivity, private val includeApp: Boolean) : Scre
         for ((i, e) in evs.withIndex()) {
             val icon = when (e.kind) { 1 -> R.drawable.ic_send; 2 -> R.drawable.ic_receive; else -> R.drawable.ic_globe }
             val color = when (e.kind) { 1 -> Theme.SEND_B; 2 -> Theme.RECV_A; else -> Theme.MUTED }
-            val r = Ui.row(ctx, icon, color, e.text, ago(now - e.at), null, null)
+            val r = Ui.row(ctx, icon, e.text, ago(now - e.at), null, null)
             events.addView(r, LinearLayout.LayoutParams(ScreenKit.MATCH, ScreenKit.WRAP))
             if (i == 0 && grew) Anim.enter(r)
         }

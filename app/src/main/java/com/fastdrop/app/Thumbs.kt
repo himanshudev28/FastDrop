@@ -130,7 +130,7 @@ object Thumbs {
                 iv.setImageBitmap(bmp)
                 if (Theme.animationsOn(ctx)) {
                     iv.alpha = 0f
-                    iv.animate().alpha(1f).setDuration(Theme.DUR_FAST).setInterpolator(Theme.EASE_OUT).start()
+                    iv.animate().alpha(1f).setDuration(Theme.D_STATE).setInterpolator(Theme.EASE_ENTER).start()
                 }
             }
         }
@@ -143,10 +143,19 @@ object Thumbs {
         old.task?.let { it.cancel(false); pool.remove(it) }
     }
 
+    /** The category plate (docs 2.3): a flat identity colour with the type glyph in its ON colour. */
     private fun placeholder(ctx: Context, name: String): Drawable? = try {
+        val e = ext(name)
+        val kind = when {
+            e in IMG -> "photos"; e in VID -> "videos"; e in AUD -> "music"; e == "apk" -> "apps"; else -> "files"
+        }
+        val p = Theme.plateFor(kind)
         val d = ctx.resources.getDrawable(iconFor(name), null).mutate()
-        d.setTint(tintFor(name))
-        InsetDrawable(d, (ctx.resources.displayMetrics.density * 14f).toInt())
+        d.setTint(p.on)
+        android.graphics.drawable.LayerDrawable(arrayOf(
+            android.graphics.drawable.ColorDrawable(p.fill),
+            InsetDrawable(d, 0.28f)
+        ))
     } catch (_: Exception) { null }
 
     // ---- workers (run on pool threads) ----

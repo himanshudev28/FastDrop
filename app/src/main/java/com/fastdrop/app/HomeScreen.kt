@@ -1,50 +1,55 @@
 package com.fastdrop.app
 
 import android.content.Context
-import android.graphics.drawable.GradientDrawable
+import android.content.Intent
+import android.graphics.Outline
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkRequest
+import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.SystemClock
+import android.provider.Settings
 import android.text.TextUtils
 import android.text.format.DateUtils
 import android.view.Gravity
 import android.view.View
 import android.view.ViewOutlineProvider
-import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 
 /**
- * Home: who we are, big Send / Receive cards, quick pickers, devices found on the same Wi-Fi
- * (automatic, no QR) and recently received files (with Install for apps).
+ * Home (docs/DESIGN.md 4.1), device-first: who we are and whether we are reachable, the devices
+ * nearby as numbered ports, two other ways, the last three transfers, and a docked
+ * [Receive][Send] bar that shows the colour code on the first screen.
  */
 class HomeScreen(host: MainActivity) : Screen(host) {
 
-    private var sendCard: View? = null
-    private lateinit var bannerBox: LinearLayout
-    private lateinit var deviceBox: LinearLayout
+    private var sendBtn: View? = null
+    private lateinit var heroBox: LinearLayout
     private lateinit var nearbyBox: LinearLayout
     private lateinit var recentBox: LinearLayout
+    private lateinit var strip: TransferStrip
 
-    private var sigBanner: String? = null
-    private var sigDevice: String? = null
+    private var sigHero: String? = null
     private var sigNearby: String? = null
     private var sigRecent: String? = null
+    private var sigStrip: String? = null
     private val seenNearby = HashSet<String>()
-    private val seenRecent = HashSet<String>()
     private var built = false
+    private var firstPort: View? = null
 
-    private var netCache: String? = null
-    private var netAt = 0L
     private var netCb: ConnectivityManager.NetworkCallback? = null
+    private var netName: String = ""
+    private var netAt = 0L
 
     private fun dp(v: Int) = Theme.dp(ctx, v)
+    private fun s(id: Int, vararg a: Any): String = ctx.getString(id, *a)
 
-    private fun lp(w: Int = -1, h: Int = -2, weight: Float = 0f, top: Int = 0, bottom: Int = 0, start: Int = 0, end: Int = 0) =
-        LinearLayout.LayoutParams(w, h, weight).apply {
-            topMargin = dp(top); bottomMargin = dp(bottom); marginStart = dp(start); marginEnd = dp(end)
-        }
+    private fun lp(w: Int = -1, h: Int = -2, weight: Float = 0f, top: Int = 0) =
+        LinearLayout.LayoutParams(w, h, weight).apply { topMargin = dp(top) }
+
+    override val wantsTick: Boolean get() = Hub.transfer?.running == true
 
     // ---------------------------------------------------------------- build
 
@@ -52,160 +57,104 @@ class HomeScreen(host: MainActivity) : Screen(host) {
         val c = ctx
         val wide = Ui.wide(c)
         built = false
-        sigBanner = null; sigDevice = null; sigNearby = null; sigRecent = null
-        seenNearby.clear(); seenRecent.clear()
+        sigHero = null; sigNearby = null; sigRecent = null; sigStrip = null
+        seenNearby.clear()
+
+        heroBox = Ui.column(c)
+        nearbyBox = Ui.column(c)
+        recentBox = Ui.column(c)
 
         val content = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
-        val blocks = ArrayList<View>()
-        fun add(parent: LinearLayout, v: View, bottom: Int = 16) {
-            parent.addView(v, lp(bottom = bottom))
-            blocks.add(v)
+        content.addView(header(), lp())
+        content.addView(heroBox, lp(top = 4))
+
+        val nearby = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+        val scan = if (QrScanActivity.hasCamera(c)) Ui.quietButton(c, s(R.string.home_scan)) { host.scanQr(true) } else null
+        nearby.addView(Ui.section(c, s(R.string.home_nearby), scan), lp())
+        nearby.addView(nearbyBox, lp())
+
+        val other = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+        other.addView(Ui.section(c, s(R.string.home_other_ways)), lp())
+        if (QrScanActivity.hasCamera(c)) {
+            other.addView(Ui.row(c, R.drawable.ic_scan, s(R.string.home_scan_code), null, Ui.chevron(c)) { host.scanQr(true) }, lp())
         }
+        val web = Theme.plateFor("browser")
+        other.addView(Ui.row(c, null, s(R.string.home_share_any), s(R.string.home_share_any_sub), Ui.chevron(c),
+            lead = Ui.plate(c, R.drawable.ic_globe, web.fill, web.on, 40, Job.WEB), job = Job.WEB) { host.showWebShare(false) }, lp())
 
-        add(content, topBar(), 4)
-        bannerBox = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
-        content.addView(bannerBox, lp())
-        deviceBox = Ui.card(c, 6)
-        nearbyBox = Ui.card(c, 6)
-        recentBox = Ui.card(c, 6)
+        val recent = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+        recent.addView(Ui.section(c, s(R.string.home_recent)), lp())
+        recent.addView(recentBox, lp())
 
-        val left: LinearLayout
-        val right: LinearLayout
         if (wide) {
             val cols = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL }
-            left = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
-            right = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
-            cols.addView(left, lp(0, -2, 1f, end = 12))
-            cols.addView(right, lp(0, -2, 1f, start = 12))
+            val left = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+            val right = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+            left.addView(nearby, lp(top = 24)); left.addView(other, lp(top = 24))
+            right.addView(recent, lp(top = 24))
+            cols.addView(left, lp(0, -2, 1f)); cols.addView(right, lp(0, -2, 1f))
             content.addView(cols, lp())
         } else {
-            left = content
-            right = content
+            content.addView(nearby, lp(top = 24))
+            content.addView(other, lp(top = 24))
+            content.addView(recent, lp(top = 24))
         }
 
-        add(left, deviceBox)
-        add(left, actionCards())
-        add(left, Ui.label(c, "Quick send"), 8)
-        add(left, quickTiles())
-        add(left, linkRows())
-
-        add(right, Ui.label(c, "Nearby on this Wi-Fi"), 8)
-        add(right, nearbyBox)
-        add(right, Ui.label(c, "Recent"), 8)
-        add(right, recentBox, 8)
-
         val page = Ui.scrollPage(c, content)
-        Anim.stagger(blocks, 40, 45)
+        // applyInsets on the scroll page pads the bottom by the nav bar; the dock does that itself.
+        page.setPadding(page.paddingLeft, page.paddingTop, page.paddingRight, 0)
+        Ui.applyInsets(page, true, false)
+
+        strip = TransferStrip(c) { host.showTransfer() }.apply { visibility = View.GONE }
+
+        val dock = Ui.dock(c)
+        val receive = Ui.jobButton(c, s(R.string.home_receive), Job.RECEIVE) { host.push(ReceiveScreen(host)) }
+        val send = Ui.jobButton(c, s(R.string.home_send), Job.SEND) { host.startSend() }
+        sendBtn = send
+        dock.addView(receive, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(12) })
+        dock.addView(send, LinearLayout.LayoutParams(0, -2, 2f))
+
+        val root = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
+        root.addView(page, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(strip, LinearLayout.LayoutParams(-1, -2))
+        root.addView(dock, LinearLayout.LayoutParams(-1, -2))
         refresh()
         built = true
-        return page
+        return root
     }
 
-    private fun topBar(): View {
+    private fun header(): View {
         val c = ctx
         val bar = LinearLayout(c).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(12), 0, dp(4))
+            minimumHeight = dp(56)
+            setPadding(Ui.gutter(c), 0, dp(4), 0)
         }
-        val logo = android.widget.FrameLayout(c).apply {
-            background = Ui.gradient(Theme.BRAND, Theme.dp(c, 11).toFloat())
-        }
-        logo.addView(Ui.icon(c, R.drawable.ic_bolt, android.graphics.Color.WHITE, 20),
-            android.widget.FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER))
-        bar.addView(logo, lp(dp(38), dp(38), end = 12))
-        bar.addView(Ui.title(c, "FastDrop", 24f), lp(0, -2, 1f))
-        bar.addView(Ui.iconButton(c, R.drawable.ic_settings, "Settings") { host.showSettings() })
+        bar.addView(Ui.text(c, s(R.string.home_title), Type.TITLE), lp(0, -2, 1f))
+        // History (stage 2 adds the screen; Home reads HistoryStore for Recent meanwhile).
+        bar.addView(Ui.iconButton(c, R.drawable.ic_settings, s(R.string.cd_settings)) { host.showSettings() })
         return bar
-    }
-
-    private fun actionCards(): View {
-        val c = ctx
-        val row = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL }
-        val send = Ui.actionCard(c, "Send", "Photos, apps, files", R.drawable.ic_send, Theme.SEND) { host.startSend() }
-        val recv = Ui.actionCard(c, "Receive", "Show QR, be visible", R.drawable.ic_receive, Theme.RECEIVE) {
-            host.push(ReceiveScreen(host))
-        }
-        sendCard = send
-        row.addView(send, lp(0, -2, 1f, end = 6))
-        row.addView(recv, lp(0, -2, 1f, start = 6))
-        return row
-    }
-
-    private fun quickTiles(): View {
-        val c = ctx
-        class T(val label: String, val icon: Int, val tint: Int, val tab: String)
-        val items = listOf(
-            T("Apps", R.drawable.ic_apps, Theme.CAT_APPS, PickerActivity.TAB_APPS),
-            T("Photos", R.drawable.ic_photo, Theme.CAT_PHOTOS, PickerActivity.TAB_PHOTOS),
-            T("Videos", R.drawable.ic_video, Theme.CAT_VIDEOS, PickerActivity.TAB_VIDEOS),
-            T("Music", R.drawable.ic_music, Theme.CAT_MUSIC, PickerActivity.TAB_MUSIC),
-            T("Files", R.drawable.ic_file, Theme.CAT_FILES, PickerActivity.TAB_FILES),
-        )
-        // Fill the width when it fits, otherwise scroll sideways.
-        val gutter = if (Ui.tv(c)) Theme.TV_GUTTER else Theme.GUTTER
-        val avail = c.resources.configuration.screenWidthDp / (if (Ui.wide(c)) 2 else 1) - gutter * 2
-        val fits = avail >= items.size * 76 + (items.size - 1) * 8
-        val row = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL }
-        items.forEachIndexed { i, t ->
-            val tile = Ui.tile(c, t.label, t.icon, t.tint) { host.openPicker(t.tab) }
-            row.addView(tile, if (fits) lp(0, -2, 1f, start = if (i > 0) 8 else 0) else lp(dp(76), -2, 0f, start = if (i > 0) 8 else 0))
-        }
-        val hsv = HorizontalScrollView(c).apply {
-            isHorizontalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_NEVER
-            isFillViewport = true
-            clipToPadding = false
-            clipChildren = false
-            setPadding(0, dp(6), 0, dp(8))
-            addView(row, android.widget.FrameLayout.LayoutParams(-1, -2))
-        }
-        return hsv
-    }
-
-    private fun chevron(): View = Ui.icon(ctx, R.drawable.ic_chevron, Theme.MUTED, 18)
-
-    private fun linkRows(): View {
-        val c = ctx
-        val card = Ui.card(c, 6)
-        var first = true
-        fun addRow(v: View) {
-            if (!first) card.addView(Ui.divider(c))
-            first = false
-            card.addView(v, lp())
-        }
-        if (QrScanActivity.hasCamera(c)) {
-            addRow(Ui.row(c, R.drawable.ic_scan, Theme.ACCENT, "Scan QR code",
-                "Join a device that shows its code", chevron()) { host.scanQr(true) })
-        }
-        addRow(Ui.row(c, R.drawable.ic_globe, Theme.WEB_A, "Share with any device",
-            "iPhone, PC — no app needed", chevron()) { host.showWebShare(false) })
-        return card
     }
 
     // ---------------------------------------------------------------- lifecycle
 
     override fun onShow() {
-        // Ask the network who is around right now instead of waiting for the next announce.
         try { Discovery.nudge() } catch (_: Exception) { }
         watchNetwork()
         netAt = 0L
         refresh()
     }
 
-    override fun onHide() {
-        unwatchNetwork()
-    }
+    override fun onHide() { unwatchNetwork() }
 
-    /** Wi-Fi connects / disconnects must update the network line and the Nearby empty state. */
+    /** Wi-Fi connects / disconnects must update the status line and the Nearby empty state. */
     private fun watchNetwork() {
         if (netCb != null) return
         try {
             val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             val cb = object : ConnectivityManager.NetworkCallback() {
-                private fun poke() {
-                    Hub.main.postDelayed({ netAt = 0L; Hub.changed() }, 400)
-                }
+                private fun poke() { Hub.main.postDelayed({ netAt = 0L; Hub.changed() }, 400) }
                 override fun onAvailable(network: Network) = poke()
                 override fun onLost(network: Network) = poke()
                 override fun onLinkPropertiesChanged(network: Network, lp: android.net.LinkProperties) = poke()
@@ -218,239 +167,327 @@ class HomeScreen(host: MainActivity) : Screen(host) {
     private fun unwatchNetwork() {
         val cb = netCb ?: return
         netCb = null
-        try {
-            (ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager).unregisterNetworkCallback(cb)
-        } catch (_: Exception) { }
+        try { (ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager).unregisterNetworkCallback(cb) } catch (_: Exception) { }
     }
 
-    override fun firstFocus(): View? = sendCard
+    override fun firstFocus(): View? = firstPort ?: sendBtn
 
     override fun refresh() {
-        if (!::bannerBox.isInitialized) return
-        renderBanner()
-        renderDevice()
+        if (!::heroBox.isInitialized) return
+        renderStrip()
+        renderHero()
         renderNearby()
         renderRecent()
     }
 
-    // ---------------------------------------------------------------- helpers
+    // ---------------------------------------------------------------- network
 
-    /** Puts [lead] in front of a row's text (rows built without an icon). */
-    private fun withLead(row: LinearLayout, lead: View, sizeDp: Int): LinearLayout {
-        row.addView(lead, 0, lp(dp(sizeDp), dp(sizeDp), end = 14))
-        return row
+    /** The Wi-Fi name when Android lets us read it, else a plain "Wi-Fi". */
+    @Suppress("DEPRECATION")
+    private fun wifiName(): String {
+        return try {
+            val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            val ssid = wm.connectionInfo?.ssid?.trim('"') ?: ""
+            if (ssid.isEmpty() || ssid == "<unknown ssid>" || ssid == WifiManager.UNKNOWN_SSID) s(R.string.home_wifi_name_unknown) else ssid
+        } catch (_: Exception) { s(R.string.home_wifi_name_unknown) }
     }
 
-    private fun netLine(): String {
+    private fun online() = try { Net.localAddrs().isNotEmpty() } catch (_: Exception) { true }
+    private fun wifiOn() = try { Links.wifiEnabled(ctx) } catch (_: Exception) { true }
+
+    /** Network name shown on the status line and in "Looking on ...". */
+    private fun networkLabel(): String {
         val now = SystemClock.elapsedRealtime()
-        val cached = netCache
-        if (cached != null && now - netAt < 3000) return cached
-        val line = try {
+        if (netName.isNotEmpty() && now - netAt < 3000) return netName
+        netAt = now
+        netName = try {
             val a = Net.localAddrs().firstOrNull()
-            if (a == null) {
-                if (Links.p2pSupported(ctx)) "No Wi-Fi — use Wi-Fi Direct" else "Not connected to Wi-Fi"
-            } else {
-                val n = a.iface.name.lowercase()
-                val kind = when {
-                    n.startsWith("wlan") -> "Wi-Fi"
-                    n.startsWith("eth") -> "Ethernet"
-                    n.startsWith("p2p") -> "Wi-Fi Direct"
-                    else -> "Network"
-                }
-                "$kind · ${a.ip.hostAddress ?: ""}"
+            when {
+                a == null -> ""
+                a.iface.name.lowercase().startsWith("wlan") -> wifiName()
+                a.iface.name.lowercase().startsWith("eth") -> "Ethernet"
+                a.iface.name.lowercase().startsWith("p2p") -> "Wi‑Fi Direct"
+                else -> s(R.string.home_wifi_name_unknown)
             }
-        } catch (_: Exception) { "Network unavailable" }
-        netCache = line; netAt = now
-        return line
+        } catch (_: Exception) { "" }
+        return netName
     }
 
-    // ---------------------------------------------------------------- active transfer banner
+    // ---------------------------------------------------------------- transfer strip
 
-    private fun renderBanner() {
+    private fun renderStrip() {
         val t = Hub.transfer
         val pending = Hub.pendingSendTo
         val running = t?.running == true
-        val sig = when {
-            running -> "run:${System.identityHashCode(t)}"
-            pending != null -> "pend:$pending"
-            else -> ""
+        val title: String
+        val meta: String
+        val job: Job
+        var frac = 0f
+        when {
+            running && t != null -> {
+                job = if (t.outgoing) Job.SEND else Job.RECEIVE
+                title = s(if (t.outgoing) R.string.title_sending else R.string.title_receiving, t.peer)
+                val done = t.done.get()
+                frac = if (t.total > 0) (done.toDouble() / t.total).toFloat() else 0f
+                val el = (SystemClock.elapsedRealtime() - t.startedAt).coerceAtLeast(1)
+                val sp = t.sessionDone * 1000.0 / el
+                val pct = (frac * 100).toInt()
+                meta = if (sp > 1 && t.total > 0) s(R.string.strip_meta, pct, Io.duration(((t.total - done) / sp).toLong()))
+                else s(R.string.strip_meta_noeta, pct)
+            }
+            pending != null -> {
+                job = Job.SEND
+                title = s(R.string.strip_connecting, pending)
+                meta = ""
+            }
+            else -> {
+                if (strip.visibility != View.GONE) strip.visibility = View.GONE
+                sigStrip = null
+                return
+            }
         }
-        if (sig == sigBanner) return
-        sigBanner = sig
-        bannerBox.removeAllViews()
-        if (sig.isEmpty()) return
-        val c = ctx
-        val title = when {
-            running && t != null -> (if (t.outgoing) "Sending to " else "Receiving from ") + t.peer
-            else -> "Connecting to $pending…"
-        }
-        val card = Ui.card(c, 4)
-        card.addView(Ui.row(c, R.drawable.ic_speed, Theme.ACCENT_2, title, "Tap to see progress",
-            Ui.chip(c, "View", Theme.ACCENT_2)) { host.showTransfer() }, lp())
-        bannerBox.addView(card, lp(bottom = 16))
-        if (built) Anim.enter(card)
+        if (strip.visibility != View.VISIBLE) strip.visibility = View.VISIBLE
+        strip.update(job, title, meta, frac)
     }
 
     // ---------------------------------------------------------------- this device
 
-    private fun renderDevice() {
+    private fun renderHero() {
         val err = Server.error
-        val status = err ?: ("Ready to receive" + if (Hub.autoAccept) " · auto-accept on" else "")
-        val net = netLine()
-        val sig = "${Hub.myName}|${Hub.myType}|$status|$net"
-        if (sig == sigDevice) return
-        sigDevice = sig
-
+        val on = online()
+        val wifi = wifiOn()
+        val net = networkLabel()
+        val ip = try { Net.primaryIp() ?: "" } catch (_: Exception) { "" }
+        val sig = "${Hub.myName}|$err|$on|$wifi|$net|$ip|${Hub.autoMode}|${Trust.hasAny()}"
+        if (sig == sigHero) return
+        sigHero = sig
         val c = ctx
-        val chip = Ui.chip(c, if (err == null) "Ready" else "Offline", if (err == null) Theme.SUCCESS else Theme.WARNING)
-        val row = Ui.row(c, null, Theme.ACCENT, Hub.myName, "$status\n$net", chip) { host.showSettings() }
-        withLead(row, Ui.avatar(c, Hub.myName, Hub.myType, 46, Theme.BRAND), 46)
-        deviceBox.removeAllViews()
-        deviceBox.addView(row, lp())
+
+        heroBox.removeAllViews()
+        val g = Ui.gutter(c)
+        val name = Ui.text(c, Hub.myName, Type.HERO).apply {
+            maxLines = 2; ellipsize = TextUtils.TruncateAt.END
+            setPadding(g, dp(8), g, dp(4))
+            isFocusable = true
+            setOnClickListener { Ui.haptic(it); host.showSettings() }
+            Ui.focusFill(this, null, 1.02f, 0f, null)
+            setTextColor(Ui.states(Theme.INK, Theme.BG, Ui.tv(c)))
+        }
+        heroBox.addView(name, lp())
+
+        val line = LinearLayout(c).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(g, dp(4), g, 0)
+        }
+        val led: Led
+        val label: View
+        when {
+            err != null -> {
+                led = Led.DANGER
+                label = LinearLayout(c).apply {
+                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                    addView(Ui.icon(c, R.drawable.ic_alert, Theme.TXT_DANGER, 16), LinearLayout.LayoutParams(dp(16), dp(16)).apply { marginEnd = dp(6) })
+                    addView(Ui.text(c, s(R.string.home_cant_receive, err), Type.META, Theme.TXT_DANGER))
+                }
+            }
+            !on -> {
+                led = Led.OFF
+                label = Ui.text(c, s(if (!wifi) R.string.home_wifi_off else R.string.home_no_network), Type.META)
+            }
+            else -> {
+                led = Led.OK
+                label = LinearLayout(c).apply {
+                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                    addView(Ui.text(c, "$net · ", Type.META))
+                    addView(Ui.mono(c, ip))
+                }
+            }
+        }
+        line.addView(Ui.led(c, led), LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginEnd = dp(8) })
+        line.addView(label, LinearLayout.LayoutParams(-2, -2))
+        heroBox.addView(line, lp())
+        if (err == null) {
+            val summary = when (Hub.autoMode) {
+                Hub.AUTO_EVERYONE -> R.string.home_accept_everyone
+                Hub.AUTO_ASK -> R.string.home_accept_ask
+                else -> R.string.home_accept_trusted
+            }
+            heroBox.addView(Ui.text(c, s(summary), Type.META).apply { setPadding(g, dp(2), g, dp(16)) }, lp())
+        } else heroBox.addView(Ui.spacer(c, 16))
     }
 
-    // ---------------------------------------------------------------- nearby (same Wi-Fi, automatic)
+    // ---------------------------------------------------------------- nearby ports
+
+    private fun kindLabel(type: String) = when (type) {
+        "tv" -> s(R.string.type_tv)
+        "phone" -> s(R.string.type_phone)
+        else -> s(R.string.type_computer)
+    }
+
+    private fun viaRank(d: Device) = when (d.via) { Device.VIA_LAN -> 0; Device.VIA_P2P -> 1; else -> 2 }
 
     private fun renderNearby() {
-        val list = Hub.devices.values.filter { it.via == Device.VIA_LAN }.sortedBy { it.name.lowercase() }.take(8)
-        val sel = Hub.selection
-        val wifiOn = try { Links.wifiEnabled(ctx) } catch (_: Exception) { true }
-        val online = try { Net.localAddrs().isNotEmpty() } catch (_: Exception) { true }
-        val sig = sel.size.toString() + "|$wifiOn|$online|" + list.joinToString("|") { "${it.id},${it.name},${it.type}" }
+        val list = Hub.devices.values.sortedWith(compareBy({ viaRank(it) }, { it.name.lowercase() })).take(9)
+        val wifiOn = wifiOn()
+        val online = online()
+        val sig = "$wifiOn|$online|" + list.joinToString("|") { "${it.id},${it.name},${it.type},${it.via},${it.ip}" }
         if (sig == sigNearby) return
         sigNearby = sig
 
         val c = ctx
         val focusId = nearbyBox.findFocus()?.tag
         nearbyBox.removeAllViews()
+        firstPort = null
+        val g = Ui.gutter(c)
         if (list.isEmpty()) {
             val line = LinearLayout(c).apply {
-                orientation = LinearLayout.HORIZONTAL
+                orientation = LinearLayout.VERTICAL
+                minimumHeight = dp(64)
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(12), dp(12), dp(12), dp(12))
+                setPadding(g, dp(8), g, dp(8))
             }
-            // Our own hotspot or Ethernet is a network too, even with Wi‑Fi switched off.
-            val searching = online
-            val dot = Ui.dot(c, if (searching) Theme.ACCENT_2 else Theme.WARNING, 10)
-            line.addView(dot, lp(dp(10), dp(10), end = 14))
-            val msg = when {
-                online -> "Looking for devices… Open FastDrop on the other device. " +
-                    "Devices on the same Wi-Fi or hotspot appear here by themselves."
-                !wifiOn -> "Wi-Fi is off. Turn it on to find devices, or use Receive for Wi-Fi Direct."
-                else -> "Not connected to Wi-Fi. Join the same Wi-Fi as the other device and it appears here."
+            when {
+                online -> {
+                    val r = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                    r.addView(ScanTicks(c), LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(12) })
+                    r.addView(Ui.text(c, s(R.string.home_looking, networkLabel().ifEmpty { s(R.string.home_wifi_name_unknown) }), Type.ROW))
+                    line.addView(r)
+                    line.addView(Ui.text(c, s(R.string.home_looking_meta), Type.META).apply { setPadding(0, dp(2), 0, 0) })
+                }
+                !wifiOn -> {
+                    line.addView(Ui.text(c, s(R.string.home_wifi_off), Type.ROW))
+                    line.addView(Ui.text(c, s(R.string.home_wifi_off_meta), Type.META).apply { setPadding(0, dp(2), 0, dp(8)) })
+                    line.addView(Ui.secondaryButton(c, s(R.string.home_wifi_settings), null, true) {
+                        try { host.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) } catch (_: Exception) { }
+                    })
+                }
+                else -> {
+                    line.addView(Ui.text(c, s(R.string.home_no_network), Type.ROW))
+                    line.addView(Ui.text(c, s(R.string.home_no_network_meta), Type.META).apply { setPadding(0, dp(2), 0, 0) })
+                }
             }
-            line.addView(Ui.text(c, msg, 14f, Theme.MUTED), lp(0, -2, 1f))
             nearbyBox.addView(line, lp())
-            if (searching) Anim.pulse(dot)
             return
         }
-        val sub = if (sel.isEmpty()) "Tap to choose files and send"
-        else "Tap to send ${sel.size} item${if (sel.size == 1) "" else "s"}"
         var newIdx = 0
         list.forEachIndexed { i, d ->
-            if (i > 0) nearbyBox.addView(Ui.divider(c))
-            val row = Ui.row(c, null, Theme.ACCENT, d.name, sub,
-                Ui.icon(c, R.drawable.ic_send, Theme.ACCENT_2, 20)) { host.sendTo(d) }
-            withLead(row, Ui.avatar(c, d.name, d.type, 42, if (d.type == "tv") Theme.WEB else Theme.SEND), 42)
+            val tags = ArrayList<String>()
+            tags.add(s(when (d.via) { Device.VIA_LAN -> R.string.link_wifi; Device.VIA_P2P -> R.string.link_direct; else -> R.string.link_qr }))
+            if (try { Trust.keyFor(d.id) != null } catch (_: Exception) { false }) tags.add(0, s(R.string.tag_trusted))
+            val meta = if (d.via == Device.VIA_P2P) s(R.string.meta_type_ip, kindLabel(d.type), Links.linkLabel(d.via))
+            else s(R.string.meta_type_ip, kindLabel(d.type), d.ip)
+            val row = Ui.portRow(c, i + 1, d, meta, tags) {
+                if (Hub.transfer?.running == true || Hub.pendingSendTo != null) host.toast(s(R.string.busy_wait))
+                else host.sendTo(d)
+            }
             row.tag = d.id
+            row.contentDescription = "${d.name}, ${kindLabel(d.type)}, ${tags.joinToString(", ")}"
             nearbyBox.addView(row, lp())
+            if (firstPort == null) firstPort = row
             if (seenNearby.add(d.id) && built) Anim.enter(row, (newIdx++ * 45).toLong())
             if (d.id == focusId) row.requestFocus()
         }
     }
 
-    // ---------------------------------------------------------------- recent
+    // ---------------------------------------------------------------- recent (HistoryStore)
 
-    private class Entry(val key: String, val group: List<Received>?, val file: Received?)
+    private fun ago(at: Long): String =
+        DateUtils.getRelativeTimeSpanString(at, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS,
+            DateUtils.FORMAT_ABBREV_RELATIVE).toString()
 
     private fun thumb(): ImageView {
         val c = ctx
-        val r = Theme.dp(c, 12).toFloat()
+        val r = Ui.dpf(c, Theme.R_CTRL)
         return ImageView(c).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
-            background = GradientDrawable().apply { setColor(Theme.SURFACE_3); cornerRadius = r }
+            setBackgroundColor(Theme.SURFACE_2)
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
             outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: android.graphics.Outline) {
-                    outline.setRoundRect(0, 0, view.width, view.height, r)
-                }
+                override fun getOutline(view: View, outline: Outline) { outline.setRoundRect(0, 0, view.width, view.height, r) }
             }
             clipToOutline = true
+            isDuplicateParentStateEnabled = true
         }
     }
 
-    private fun ago(at: Long): String =
-        DateUtils.getRelativeTimeSpanString(at, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS).toString()
-
     private fun renderRecent() {
-        val all = Hub.received.take(30)
-        val groups = AppInstaller.groups(all)
-        val groupOf = HashMap<Received, List<Received>>()
-        for (g in groups) for (r in g) groupOf[r] = g
-        val entries = ArrayList<Entry>()
-        val emitted = HashSet<List<Received>>()
-        for (r in all) {
-            val g = groupOf[r]
-            if (g != null) {
-                if (emitted.add(g)) entries.add(Entry("g${System.identityHashCode(g[0])}", g, null))
-            } else entries.add(Entry("f${System.identityHashCode(r)}", null, r))
-            if (entries.size >= 8) break
-        }
+        val all = HistoryStore.all().take(3)
         val minute = System.currentTimeMillis() / 60000
-        val sig = minute.toString() + entries.joinToString("|") {
-            it.key + (it.file?.uri ?: it.group?.firstOrNull()?.uri)
-        }
+        val sig = minute.toString() + all.joinToString("|") { it.id }
         if (sig == sigRecent) return
         sigRecent = sig
 
         val c = ctx
+        val g = Ui.gutter(c)
         val focusKey = recentBox.findFocus()?.tag
         recentBox.removeAllViews()
-        if (entries.isEmpty()) {
-            recentBox.addView(Ui.text(c, "Nothing received yet. Files land in Download/FastDrop.", 14f, Theme.MUTED)
-                .apply { setPadding(dp(12), dp(12), dp(12), dp(12)) }, lp())
+        if (all.isEmpty()) {
+            recentBox.addView(Ui.text(c, s(R.string.home_recent_empty), Type.META).apply { setPadding(g, dp(8), g, dp(16)) }, lp())
             return
         }
-        var newIdx = 0
-        entries.forEachIndexed { i, e ->
-            if (i > 0) recentBox.addView(Ui.divider(c))
-            val row: LinearLayout
-            if (e.group != null) {
-                val first = e.group[0]
-                val tag = e.group.firstNotNullOfOrNull { it.app }
-                val label = tag?.label ?: first.name.substringAfterLast('/').removeSuffix(".apk")
-                val size = e.group.sumOf { it.size.coerceAtLeast(0L) }
-                val ver = tag?.version?.takeIf { it.isNotEmpty() }?.let { "v$it · " } ?: ""
-                row = Ui.row(c, null, Theme.CAT_APPS, label,
-                    "$ver${Io.bytes(size)} · from ${first.from} · ${ago(first.at)}",
-                    Ui.chip(c, "Install", Theme.CAT_APPS, R.drawable.ic_install)) { host.installApp(e.group) }
-                val iv = thumb()
-                val pkg = tag?.pkg
-                if (pkg != null) Thumbs.app(iv, pkg) else Thumbs.file(iv, "app.apk", null, dp(48))
-                withLead(row, iv, 44)
-            } else if (e.file?.text != null) {
-                // Received text / link: Copy, and Open when the whole text is an http(s) URL.
-                val r = e.file
-                val txt = r.text ?: ""
-                val acts = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL }
-                acts.addView(Ui.secondaryButton(c, "Copy") { host.copyText("Text", txt) })
-                if (ProtoV2.isHttpUrl(txt)) {
-                    acts.addView(Ui.secondaryButton(c, "Open") { host.openUrl(txt) },
-                        LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(8) })
-                }
-                row = Ui.row(c, R.drawable.ic_link, Theme.ACCENT_2, r.name,
-                    "Text · from ${r.from} · ${ago(r.at)}", acts) { host.copyText("Text", txt) }
-            } else {
-                val r = e.file!!
-                row = Ui.row(c, null, Theme.ACCENT, r.name.substringAfterLast('/'),
-                    "${Io.bytes(r.size)} · from ${r.from} · ${ago(r.at)}", null) { host.openReceived(r) }
-                val iv = thumb()
-                Thumbs.file(iv, r.name, r.uri, dp(96))
-                withLead(row, iv, 44)
-            }
-            row.tag = e.key
+        for (e in all) {
+            val row = recentRow(e)
+            row.tag = e.id
             recentBox.addView(row, lp())
-            if (seenRecent.add(e.key) && built) Anim.enter(row, (newIdx++ * 45).toLong())
-            if (e.key == focusKey) row.requestFocus()
+            if (e.id == focusKey) row.requestFocus()
         }
+    }
+
+    private fun recentRow(e: HistoryEntry): View {
+        val c = ctx
+        val file = e.files.firstOrNull()
+        val failed = e.state != HistoryCodec.DONE
+        val sizeText = Io.bytes(e.total)
+        // text / link
+        if (e.text != null) {
+            val p = Theme.plateFor("text")
+            val txt = e.text
+            val url = ProtoV2.isHttpUrl(txt)
+            val meta = if (e.outgoing) s(R.string.recent_to, if (url) "Link" else "Text", e.peer)
+            else s(if (url) R.string.recent_link else R.string.recent_text, e.peer)
+            val trailing = Ui.secondaryButton(c, s(R.string.action_copy), null, true) { host.copyText("Text", txt) }
+            return Ui.row(c, null, HistoryStore.textPreview(txt), meta, trailing,
+                lead = Ui.plate(c, R.drawable.ic_link, p.fill, p.on, 40), onClick = { if (url) host.openUrl(txt) else host.copyText("Text", txt) })
+        }
+        // failed or cancelled
+        if (failed) {
+            val lead = Ui.plate(c, R.drawable.ic_alert, Theme.C_DANGER, Theme.ON_LIGHT, 40)
+            return Ui.row(c, null, titleOf(e), s(R.string.recent_failed, ago(e.at)), null, lead = lead)
+        }
+        // sent
+        if (e.outgoing) {
+            val p = Theme.plateFor("files")
+            val lead = Ui.plate(c, R.drawable.ic_send, Theme.C_SEND, Theme.ON_DARK, 40)
+            return Ui.row(c, null, titleOf(e), s(R.string.recent_to, "$sizeText · ${ago(e.at)}", e.peer), null, lead = lead)
+        }
+        // received file, group or APK
+        val meta = s(R.string.recent_from, "$sizeText · ${ago(e.at)}", e.peer)
+        val iv = thumb()
+        if (file?.appPkg != null) Thumbs.app(iv, file.appPkg) else if (file != null) Thumbs.file(iv, file.name, file.uri?.let { Uri.parse(it) }, dp(96))
+        val open = { openEntry(e) }
+        val trailing = if (file?.isApp == true)
+            Ui.secondaryButton(c, s(R.string.action_install), null, true) { open() } else null
+        return Ui.row(c, null, titleOf(e), meta, trailing, lead = iv, onClick = open)
+    }
+
+    private fun titleOf(e: HistoryEntry): String {
+        val f = e.files.firstOrNull()
+        return when {
+            f?.appLabel != null && f.appLabel.isNotEmpty() -> f.appLabel
+            e.count > 1 -> c().resources.getQuantityString(R.plurals.kind_file, e.count, e.count)
+            f != null -> f.name.substringAfterLast('/')
+            else -> e.peer
+        }
+    }
+
+    private fun c(): Context = ctx
+
+    /** Opens a received file or installs a received app, found again by its saved URI. */
+    private fun openEntry(e: HistoryEntry) {
+        val f = e.files.firstOrNull()
+        val uri = f?.uri
+        val r = Hub.received.firstOrNull { it.uri?.toString() == uri }
+        if (r == null) host.toast(s(R.string.recent_missing), 2) else host.openReceived(r)
     }
 }

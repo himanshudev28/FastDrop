@@ -4,7 +4,6 @@ import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
@@ -44,9 +43,6 @@ class QrView(ctx: Context) : View(ctx) {
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val rect = RectF()
-    private val shaderMatrix = Matrix()
-    private var shader: LinearGradient? = null
-    private var shaderBand = 0f
 
     private val placeholder: BooleanArray by lazy { buildPlaceholder() }
 
@@ -178,17 +174,7 @@ class QrView(ctx: Context) : View(ctx) {
 
     private fun drawPlaceholder(canvas: Canvas, side: Float, ox0: Float, oy0: Float) {
         val base = 0xFFE4E7F0.toInt()
-        val band = 0xFFC7CCDC.toInt()
-        val bandW = side * 0.7f
-        if (shader == null || shaderBand != bandW) {
-            shader = LinearGradient(0f, 0f, bandW, 0f, intArrayOf(base, band, base), null, Shader.TileMode.CLAMP)
-            shaderBand = bandW
-        }
-        val sh = shader!!
-        val x = -bandW + shimmer * (side + bandW * 2f) + ox0
-        shaderMatrix.setTranslate(x, 0f)
-        sh.setLocalMatrix(shaderMatrix)
-        drawGrid(canvas, placeholder, PLACEHOLDER_N, side, ox0, oy0, 1f, base, false, sh)
+        drawGrid(canvas, placeholder, PLACEHOLDER_N, side, ox0, oy0, 1f, base, false, null)
     }
 
     /** Draws modules. [reveal] drives the centre-out ripple; [shader] (placeholder) replaces the colour. */

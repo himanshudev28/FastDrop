@@ -55,9 +55,11 @@ class BrowserActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Theme.resolve(this)
         PickUi.edgeToEdge(this)
         PickUi.registerBack(this) { goUp() }
         setContentView(buildUi())
+        Theme.applyWindow(this)
         showRoots(null)
     }
 
@@ -89,7 +91,6 @@ class BrowserActivity : Activity() {
                 ins
             }
         }
-        rootView.addView(Backdrop(this), FrameLayout.LayoutParams(-1, -1))
 
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         Ui.applyInsets(column, top = true, bottom = false)
@@ -159,7 +160,6 @@ class BrowserActivity : Activity() {
         bar = PickUi.FloatingBar(this, "Add") { send() }
         rootView.addView(bar, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
 
-        if (Anim.on(this)) Anim.stagger(listOf(header, pathRow, tools), 0, 50)
         return rootView
     }
 
@@ -347,7 +347,7 @@ class BrowserActivity : Activity() {
             r.title.setTextColor(if (isSel) Theme.ACCENT else Theme.TEXT)
             r.sub.text = e.sub
             r.root.background = if (isSel)
-                PickUi.rounded(this@BrowserActivity, Theme.alpha(Theme.ACCENT, 0.14f), 16, Theme.alpha(Theme.ACCENT, 0.55f))
+                PickUi.rounded(this@BrowserActivity, Theme.SURFACE_2, 6, Theme.C_SEND, 2)
             else PickUi.rounded(this@BrowserActivity, Theme.alpha(Theme.SURFACE, 0.75f), 16, Theme.STROKE)
             r.check.set(isSel, false)
             // Touch users can tick a folder without opening it.
@@ -359,7 +359,7 @@ class BrowserActivity : Activity() {
                     if (!selected.remove(p)) selected.add(p)
                     r.check.set(p in selected, true)
                     r.root.background = if (p in selected)
-                        PickUi.rounded(this@BrowserActivity, Theme.alpha(Theme.ACCENT, 0.14f), 16, Theme.alpha(Theme.ACCENT, 0.55f))
+                        PickUi.rounded(this@BrowserActivity, Theme.SURFACE_2, 6, Theme.C_SEND, 2)
                     else PickUi.rounded(this@BrowserActivity, Theme.alpha(Theme.SURFACE, 0.75f), 16, Theme.STROKE)
                     r.title.setTextColor(if (p in selected) Theme.ACCENT else Theme.TEXT)
                     refreshState()

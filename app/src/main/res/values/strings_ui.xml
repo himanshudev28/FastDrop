@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- shared -->
+    <string name="cd_back">Back</string>
+    <string name="cd_history">History</string>
+    <string name="cd_settings">Settings</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_install">Install</string>
+    <string name="action_open">Open</string>
+    <string name="action_done">Done</string>
+    <string name="action_close">Close</string>
+    <string name="action_retry">Retry</string>
+    <string name="action_hide">Hide</string>
+    <string name="action_decline">Decline</string>
+    <string name="action_accept">Accept</string>
+    <string name="action_copy">Copy</string>
+    <string name="action_open_link">Open link</string>
+    <string name="tag_crc">CRC</string>
+    <string name="tag_trusted">Trusted</string>
+    <string name="unit_mbs">MB/s</string>
+    <string name="unit_kbs">KB/s</string>
+    <string name="cd_speed_mb">%1$s megabytes per second</string>
+    <string name="cd_speed_kb">%1$s kilobytes per second</string>
+    <string name="device_generic">device</string>
+
+    <!-- transfer sheet -->
+    <string name="title_waiting_accept">Waiting for %1$s to accept</string>
+    <string name="title_connecting">Connecting to %1$s…</string>
+    <string name="status_waiting_accept">Waiting for them to accept…</string>
+    <string name="code_label">Code</string>
+    <string name="cd_code">Confirmation code %1$s</string>
+    <string name="cd_offer_code">Code %1$s.</string>
+    <string name="code_check_sender">Check that %1$s shows the same code.</string>
+    <string name="title_sending">Sending to %1$s</string>
+    <string name="title_receiving">Receiving from %1$s</string>
+    <string name="progress_of">%1$s of %2$s</string>
+    <string name="eta_left">%1$s left</string>
+    <string name="resumed_at">Resumed at %1$d %%</string>
+    <string name="title_sent">Sent to %1$s</string>
+    <string name="title_sent_text">Sent text to %1$s</string>
+    <plurals name="title_saved">
+        <item quantity="one">Saved %1$d file to Download/FastDrop</item>
+        <item quantity="other">Saved %1$d files to Download/FastDrop</item>
+    </plurals>
+    <string name="done_in">%1$s in %2$s</string>
+    <string name="title_cancelled">Cancelled</string>
+    <string name="cancelled_sent">%1$s of %2$s sent</string>
+    <string name="cancelled_received">%1$s of %2$s received</string>
+    <string name="title_failed_send">Couldn\'t finish sending to %1$s</string>
+    <string name="title_failed_receive">Couldn\'t finish receiving from %1$s</string>
+    <string name="error_generic">Connection lost.</string>
+    <string name="retry_continues">Retry continues from %1$d %%.</string>
+    <string name="cd_progress">%1$s, %2$d percent, %3$s</string>
+    <string name="tip_slow_24">Slow 2.4 GHz Wi‑Fi. Switch both devices to 5 GHz for 3–5× the speed.</string>
+    <string name="tip_hotspot">Using your hotspot? Set its band to 5 GHz in hotspot settings for 3–5× the speed.</string>
+    <string name="and_n_more">and %1$d more</string>
+    <plurals name="text_chars">
+        <item quantity="one">%1$d character</item>
+        <item quantity="other">%1$d characters</item>
+    </plurals>
+    <plurals name="items_size">
+        <item quantity="one">%1$d item · %2$s</item>
+        <item quantity="other">%1$d items · %2$s</item>
+    </plurals>
+
+    <!-- offer sheet -->
+    <string name="offer_title">%1$s wants to send %2$s</string>
+    <string name="what_link">a link</string>
+    <string name="what_text">text</string>
+    <string name="kinds_and">%1$s and %2$s</string>
+    <plurals name="kind_photo"><item quantity="one">%1$d photo</item><item quantity="other">%1$d photos</item></plurals>
+    <plurals name="kind_video"><item quantity="one">%1$d video</item><item quantity="other">%1$d videos</item></plurals>
+    <plurals name="kind_song"><item quantity="one">%1$d song</item><item quantity="other">%1$d songs</item></plurals>
+    <plurals name="kind_app"><item quantity="one">%1$d app</item><item quantity="other">%1$d apps</item></plurals>
+    <plurals name="kind_file"><item quantity="one">%1$d file</item><item quantity="other">%1$d files</item></plurals>
+    <string name="always_accept">Always accept from %1$s</string>
+    <string name="closes_in">Closes in %1$d s</string>
+    <string name="text_sent_link">%1$s sent a link</string>
+    <string name="text_sent_text">%1$s sent text</string>
+    <string name="err_storage_permission">Allow storage access to receive files</string>
+
+    <!-- home -->
+    <string name="home_title">FastDrop</string>
+    <string name="home_nearby">Nearby</string>
+    <string name="home_scan">Scan</string>
+    <string name="home_other_ways">Other ways</string>
+    <string name="home_scan_code">Scan a code</string>
+    <string name="home_share_any">Share with any device</string>
+    <string name="home_share_any_sub">Opens in their browser. No app needed.</string>
+    <string name="home_recent">Recent</string>
+    <string name="home_recent_empty">Nothing yet. Received files go to Download/FastDrop.</string>
+    <string name="home_receive">Receive</string>
+    <string name="home_send">Send</string>
+    <string name="home_wifi_name_unknown">Wi‑Fi</string>
+    <string name="home_wifi_off">Wi‑Fi is off</string>
+    <string name="home_wifi_off_meta">Turn it on, or use Receive to connect directly.</string>
+    <string name="home_wifi_settings">Wi‑Fi settings</string>
+    <string name="home_no_network">Not on a Wi‑Fi network</string>
+    <string name="home_no_network_meta">Join the same Wi‑Fi as the other device.</string>
+    <string name="home_looking">Looking on %1$s…</string>
+    <string name="home_looking_meta">Open FastDrop on the other device.</string>
+    <string name="home_cant_receive">Can\'t receive: %1$s</string>
+    <string name="home_accept_trusted">Trusted devices send without asking</string>
+    <string name="home_accept_ask">Asks before receiving anything</string>
+    <string name="home_accept_everyone">Anyone on this network can send without asking</string>
+    <string name="link_wifi">Wi‑Fi</string>
+    <string name="link_direct">Direct</string>
+    <string name="link_qr">QR</string>
+    <string name="type_tv">TV</string>
+    <string name="type_phone">Phone</string>
+    <string name="type_computer">Computer</string>
+    <string name="meta_type_ip">%1$s · %2$s</string>
+    <string name="recent_from">%1$s · from %2$s</string>
+    <string name="recent_to">%1$s · to %2$s</string>
+    <string name="recent_link">Link · from %1$s</string>
+    <string name="recent_text">Text · from %1$s</string>
+    <string name="recent_failed">Didn\'t finish · %1$s</string>
+    <string name="recent_missing">File was moved or deleted</string>
+    <string name="strip_connecting">Connecting to %1$s…</string>
+    <string name="strip_meta">%1$d %% · %2$s</string>
+    <string name="strip_meta_noeta">%1$d %%</string>
+    <string name="busy_wait">Wait for the current transfer to finish</string>
+</resources>

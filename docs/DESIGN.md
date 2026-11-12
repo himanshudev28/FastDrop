@@ -9,6 +9,33 @@ Reading order: §0 concepts considered → §1 diagnosis → §2 direction and t
 
 ---
 
+## ⚠ Owner feedback after the first build (overrides anything below)
+
+The owner saw the first Signal build on the phone and said it is "too minimal, all options gone".
+These rules win over every later section, including §4.1 and build step 4:
+
+1. **Not minimal: every option stays one tap from Home.**
+   - Keep a **Quick send** row or grid: Apps, Photos, Videos, Music, Files, Text. Each tile is a solid plate in its category colour with an icon and a label, and it opens the picker on that tab, or the text composer for Text.
+   - Keep visible entries for Scan a code, Share with any device, and Receive / Show my QR.
+   - Don't hide features behind menus.
+2. **Colourful at rest, not only on press or focus.** A first glance should read as colourful. Colour must be visible on every screen without touching it:
+   - **Send** (orange) and **Receive** (ultramarine) as two large solid panels near the top of Home, like the old layout's two big cards but flat. They carry an icon, a title and a one-line hint, with no gradients.
+   - Category tiles in their plate colours.
+   - Device ports with a solid colour type plate.
+   - A coloured status strip.
+
+   Neutral paper/off-black stays as the background only. Still no gradients, glows, glass, cards-in-cards or Tailwind violet.
+3. **Rich, not a settings list.**
+   - Use bigger, bolder screen titles and section headings, and a confident hierarchy.
+   - No large empty areas. Sheets size to their content, or fill the space with useful things. For example, the done sheet shows file rows with type plates or thumbnails plus actions: Open, Share, Show in folder, Send back, Send more.
+4. **The dot readout must look crafted.**
+   - Evenly spaced round dots and consistent glyph widths.
+   - Unlit dots very subtle (low contrast to the panel).
+   - Enough dot resolution that digits read cleanly at a glance.
+   - The unit and progress are aligned to the readout's baseline.
+
+---
+
 ## 0. Concepts considered
 
 All three concepts follow one rule: **one memorable signature moment (the transfer), and

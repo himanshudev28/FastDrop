@@ -141,7 +141,7 @@ internal object ScreenKit {
         val buttons = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
         buttons.addView(Ui.secondaryButton(ctx, "Cancel") { hideKeyboard(); handle?.dismiss() },
             LinearLayout.LayoutParams(0, WRAP, 1f).apply { marginEnd = dp(ctx, 10) })
-        buttons.addView(Ui.primaryButton(ctx, okLabel) { submit() }, LinearLayout.LayoutParams(0, WRAP, 1f))
+        buttons.addView(Ui.jobButton(ctx, okLabel, Job.SEND) { submit() }, LinearLayout.LayoutParams(0, WRAP, 1f))
         col.addView(buttons, lp(ctx))
         val h = Sheets.show(host.root, col, true) { hideKeyboard() }
         handle = h
@@ -175,7 +175,6 @@ class SendScreen(host: MainActivity) : Screen(host) {
     private lateinit var selTitle: TextView
     private lateinit var selSub: TextView
     private lateinit var selAction: TextView
-    private lateinit var radar: RadarView
     private lateinit var statusText: TextView
     private lateinit var locBanner: View
     private lateinit var permBanner: View
@@ -220,8 +219,6 @@ class SendScreen(host: MainActivity) : Screen(host) {
         val wide = Ui.wide(ctx)
         val root = FrameLayout(ctx)
         root.setBackgroundColor(Theme.BG)
-        root.addView(Backdrop(ctx).apply { colors = intArrayOf(Theme.SEND_A, Theme.SEND_B, Theme.ACCENT) },
-            FrameLayout.LayoutParams(-1, -1))
 
         val content = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         content.addView(Ui.header(ctx, "Send to", { host.pop() }), lp(bottomDp = 6))
@@ -266,7 +263,7 @@ class SendScreen(host: MainActivity) : Screen(host) {
             content.addView(qrPanel, lp())
             sections = listOf(selCard, radarBox, devicesCard, actions)
         }
-        scroll = Ui.scrollPage(ctx, content)
+        scroll = Ui.scrollPage(ctx, content, gutter = true)
         root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
         refresh()
         return root
@@ -275,7 +272,7 @@ class SendScreen(host: MainActivity) : Screen(host) {
     // ---------------------------------------------------------------- pieces
 
     private fun buildSelectionCard(): View {
-        val card = Ui.card(ctx, 16)
+        val card = Ui.column(ctx)
         val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         selTitle = Ui.text(ctx, "", 18f, Theme.TEXT, Theme.BOLD)
@@ -289,29 +286,24 @@ class SendScreen(host: MainActivity) : Screen(host) {
     }
 
     private fun buildRadar(): View {
-        val h = ScreenKit.dp(ctx, if (Ui.wide(ctx)) 300 else 230)
+        // Stage 2 rebuilds this screen: the list is the radar. A one-line status stays for now.
         val box = FrameLayout(ctx)
-        radar = RadarView(ctx).apply {
-            colors = Theme.SEND
-            centerLabel = "You"
-            onBlipClick = { id -> Hub.devices[id]?.let { send(it) } }
-        }
-        box.addView(radar, FrameLayout.LayoutParams(-1, h))
-        statusText = Ui.text(ctx, "Looking for devices…", 14f, Theme.MUTED).apply { gravity = Gravity.CENTER }
+        statusText = Ui.text(ctx, "Looking for devices…", 14f, Theme.MUTED).apply { gravity = Gravity.START }
+        box.addView(statusText, FrameLayout.LayoutParams(-2, -2))
         return box
     }
 
     private fun buildDevices(): View {
-        val card = Ui.card(ctx, 8)
+        val card = Ui.column(ctx)
         list = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         card.addView(list, LinearLayout.LayoutParams(ScreenKit.MATCH, ScreenKit.WRAP))
         return card
     }
 
     private fun buildMultiBar(): View {
-        val card = Ui.card(ctx, 10)
+        val card = Ui.column(ctx)
         val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
-        multiBtn = Ui.primaryButton(ctx, "Send to 2 devices", Theme.SEND, R.drawable.ic_send) { sendMulti() }
+        multiBtn = Ui.jobButton(ctx, "Send to 2 devices", Job.SEND, R.drawable.ic_send) { sendMulti() }
         row.addView(Ui.secondaryButton(ctx, "Clear") { multi.clear(); refresh() },
             LinearLayout.LayoutParams(ScreenKit.WRAP, ScreenKit.WRAP).apply { marginEnd = ScreenKit.dp(ctx, 10) })
         row.addView(multiBtn, LinearLayout.LayoutParams(0, ScreenKit.WRAP, 1f))
@@ -321,21 +313,21 @@ class SendScreen(host: MainActivity) : Screen(host) {
     }
 
     private fun buildActions(): View {
-        val card = Ui.card(ctx, 8)
+        val card = Ui.column(ctx)
         fun add(v: View, divider: Boolean = true) {
-            if (card.childCount > 0 && divider) card.addView(Ui.divider(ctx))
+            if (card.childCount > 0 && divider) card.addView(Ui.rule(ctx))
             card.addView(v, LinearLayout.LayoutParams(ScreenKit.MATCH, ScreenKit.WRAP))
             if (firstAction == null) firstAction = v
         }
         if (QrScanActivity.hasCamera(ctx)) {
-            add(Ui.row(ctx, R.drawable.ic_scan, Theme.ACCENT, "Scan QR code",
+            add(Ui.row(ctx, R.drawable.ic_scan, "Scan QR code",
                 "Join the other device's code", null) { host.scanQr(true) })
         }
-        add(Ui.row(ctx, R.drawable.ic_edit, Theme.CAT_FILES, "Send text",
+        add(Ui.row(ctx, R.drawable.ic_edit, "Send text",
             "Type a message or paste a link", null) { typeText() })
-        add(Ui.row(ctx, R.drawable.ic_copy, Theme.CAT_FILES, "Send clipboard",
+        add(Ui.row(ctx, R.drawable.ic_copy, "Send clipboard",
             "Send whatever you last copied", null) { host.sendClipboard() })
-        qrRow = Ui.row(ctx, R.drawable.ic_qr, Theme.ACCENT_2, "Show my QR",
+        qrRow = Ui.row(ctx, R.drawable.ic_qr, "Show my QR",
             "Let another device scan this one", null) { toggleQr() }
         add(qrRow)
 
@@ -347,19 +339,19 @@ class SendScreen(host: MainActivity) : Screen(host) {
         val spinBox = FrameLayout(ctx)
         spinBox.addView(spin, FrameLayout.LayoutParams(ScreenKit.dp(ctx, 22), ScreenKit.dp(ctx, 22), Gravity.CENTER))
         scanSpinner = spin
-        scanRow = Ui.row(ctx, R.drawable.ic_refresh, Theme.SUCCESS, "Find on network",
+        scanRow = Ui.row(ctx, R.drawable.ic_refresh, "Find on network",
             "Search this Wi‑Fi for FastDrop", spinBox) { scanNetwork() }
         add(scanRow)
 
-        add(Ui.row(ctx, R.drawable.ic_edit, Theme.WARNING, "Enter IP address",
+        add(Ui.row(ctx, R.drawable.ic_edit, "Enter IP address",
             "Type the other device's address", null) { enterIp() })
-        add(Ui.row(ctx, R.drawable.ic_globe, Theme.WEB_A, "Share via browser",
+        add(Ui.row(ctx, R.drawable.ic_globe, "Share via browser",
             "iPhone, PC — no app needed", null) { host.showWebShare(false) })
         return card
     }
 
     private fun buildQrPanel() {
-        qrPanel = Ui.card(ctx, 20).apply { visibility = View.GONE; gravity = Gravity.CENTER_HORIZONTAL }
+        qrPanel = Ui.column(ctx).apply { visibility = View.GONE; gravity = Gravity.CENTER_HORIZONTAL }
         qrPanel.addView(Ui.text(ctx, "Your code", 13f, Theme.MUTED, Theme.MEDIUM), lp(bottomDp = 10))
         qrView = QrView(ctx)
         val size = ScreenKit.dp(ctx, if (Ui.wide(ctx)) 240 else 250)
@@ -375,8 +367,8 @@ class SendScreen(host: MainActivity) : Screen(host) {
     }
 
     private fun banner(icon: Int, title: String, sub: String, onClick: () -> Unit): View {
-        val card = Ui.card(ctx, 4)
-        card.addView(Ui.row(ctx, icon, Theme.WARNING, title, sub, null, onClick),
+        val card = Ui.column(ctx)
+        card.addView(Ui.row(ctx, icon, title, sub, null, onClick = onClick),
             LinearLayout.LayoutParams(ScreenKit.MATCH, ScreenKit.WRAP))
         card.visibility = View.GONE
         return card
@@ -465,7 +457,6 @@ class SendScreen(host: MainActivity) : Screen(host) {
 
     override fun onShow() {
         shown = true
-        radar.start()
         Discovery.nudge()
         if (Links.p2pSupported(ctx)) {
             if (Links.hasPermissions(ctx)) Links.startNearby(ctx)
@@ -478,13 +469,11 @@ class SendScreen(host: MainActivity) : Screen(host) {
         refresh()
         if (!entered) {
             entered = true
-            Anim.stagger(sections, 40)
         }
     }
 
     override fun onHide() {
         shown = false
-        radar.stop()
         Links.stopNearby()
         Links.stopHosting("send")
         sheet?.dismiss(); sheet = null
@@ -577,7 +566,6 @@ class SendScreen(host: MainActivity) : Screen(host) {
         val sig = devs.joinToString("|") { it.id + it.name + it.via }
         if (sig != lastBlipSig) {
             lastBlipSig = sig
-            radar.setBlips(devs.map { RadarView.Blip(it.id, it.name, it.type, tint(it.via)) })
         }
         val n = devs.size
         ScreenKit.fadeText(statusText, when {
@@ -601,7 +589,7 @@ class SendScreen(host: MainActivity) : Screen(host) {
         fun section(key: String, title: String, group: List<Device>) {
             if (group.isEmpty()) return
             entries.add(Entry("hdr:$key", title) {
-                Ui.label(ctx, title).apply { setPadding(ScreenKit.dp(ctx, 14), ScreenKit.dp(ctx, 10), 0, ScreenKit.dp(ctx, 2)) }
+                Ui.section(ctx, title).apply { setPadding(ScreenKit.dp(ctx, 14), ScreenKit.dp(ctx, 10), 0, ScreenKit.dp(ctx, 2)) }
             })
             for (d in group) {
                 val sig = "${d.name}|${d.ip}|${d.type}|${d.via}|${d.id in multi}"
@@ -683,14 +671,13 @@ class SendScreen(host: MainActivity) : Screen(host) {
         val color = tint(d.via)
         val chipIcon = when (d.via) { Device.VIA_LAN -> R.drawable.ic_wifi; Device.VIA_P2P -> R.drawable.ic_wifi_direct; else -> R.drawable.ic_qr }
         val picked = d.id in multi
-        val chip = if (picked) Ui.chip(ctx, "Selected", Theme.SUCCESS, R.drawable.ic_check)
-        else Ui.chip(ctx, Links.linkLabel(d.via), color, chipIcon)
+        val chip = Ui.tag(ctx, if (picked) "Selected" else Links.linkLabel(d.via))
         val sub = when (d.via) {
             Device.VIA_LAN -> d.ip
             Device.VIA_P2P -> "Tap to connect over Wi‑Fi Direct"
             else -> if (d.join?.hasNetwork == true) "Joins its Wi‑Fi when you send" else d.ip
         }
-        val row = Ui.row(ctx, icon, if (picked) Theme.SUCCESS else color, d.name, sub, chip) { send(d) }
+        val row = Ui.row(ctx, icon, d.name, sub, chip, onClick = { send(d) })
         // Long-press (or hold OK on a remote) to pick several devices.
         row.setOnLongClickListener { toggleMulti(d.id); true }
         return row
@@ -703,9 +690,8 @@ class SendScreen(host: MainActivity) : Screen(host) {
             val p = ScreenKit.dp(ctx, 14)
             setPadding(p, ScreenKit.dp(ctx, 16), p, ScreenKit.dp(ctx, 16))
         }
-        val dot = Ui.dot(ctx, if (wifiOn) Theme.ACCENT_2 else Theme.WARNING, 10)
-        box.addView(dot, LinearLayout.LayoutParams(ScreenKit.dp(ctx, 10), ScreenKit.dp(ctx, 10)).apply { marginEnd = ScreenKit.dp(ctx, 14) })
-        if (wifiOn) try { Anim.pulse(dot) } catch (_: Exception) { }
+        val dot: View = if (wifiOn) ScanTicks(ctx) else Ui.led(ctx, Led.OFF)
+        box.addView(dot, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = ScreenKit.dp(ctx, 14) })
         val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         col.addView(Ui.text(ctx, if (wifiOn) "Looking for devices…" else "No Wi‑Fi network", 16f, Theme.TEXT, Theme.MEDIUM))
         col.addView(Ui.text(ctx,

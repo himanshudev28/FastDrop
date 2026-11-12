@@ -113,6 +113,7 @@ class QrScanActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setResult(RESULT_CANCELED)
+        Theme.resolve(this)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setupEdgeToEdge()
         buildUi()
@@ -277,7 +278,7 @@ class QrScanActivity : Activity() {
             background = GradientDrawable().apply {
                 setColor(Theme.SURFACE)
                 setStroke(dp(1), Theme.STROKE)
-                cornerRadius = dp(Theme.RADIUS_CARD.toInt()).toFloat()
+                cornerRadius = dp(Theme.R_SHEET.toInt()).toFloat()
             }
         }
         panelTitle = TextView(this).apply {
@@ -880,7 +881,7 @@ class QrScanActivity : Activity() {
             successAnim?.cancel()
             successAnim = ValueAnimator.ofFloat(0f, 1f).apply {
                 duration = 320
-                interpolator = Theme.SPRING
+                interpolator = Theme.EASE_ENTER
                 addUpdateListener { success = it.animatedValue as Float; invalidate() }
                 start()
             }
@@ -927,30 +928,6 @@ class QrScanActivity : Activity() {
             if (success > 0f) {
                 tintPaint.color = Theme.alpha(green, 0.16f * success)
                 canvas.drawRoundRect(rect, r, r, tintPaint)
-            }
-
-            // sweeping line with a soft trail, clipped to the window
-            if (!succeeded) {
-                val y = rect.top + rect.height() * (0.06f + 0.88f * sweep)
-                val edge = Math.sin(Math.PI * sweep).toFloat().coerceIn(0f, 1f)
-                clip.reset()
-                clip.addRoundRect(rect, r, r, Path.Direction.CW)
-                canvas.save()
-                canvas.clipPath(clip)
-                val trail = rect.height() * 0.28f
-                trailPaint.shader = LinearGradient(
-                    0f, y - trail, 0f, y,
-                    Theme.alpha(Theme.ACCENT_2, 0f), Theme.alpha(Theme.ACCENT_2, 0.30f * edge), android.graphics.Shader.TileMode.CLAMP
-                )
-                canvas.drawRect(rect.left, y - trail, rect.right, y, trailPaint)
-                linePaint.shader = LinearGradient(
-                    rect.left, 0f, rect.right, 0f,
-                    intArrayOf(0x00FFFFFF, Theme.alpha(Color.WHITE, 0.95f * edge), 0x00FFFFFF),
-                    floatArrayOf(0f, 0.5f, 1f), android.graphics.Shader.TileMode.CLAMP
-                )
-                linePaint.strokeWidth = 2.5f * d
-                canvas.drawLine(rect.left, y, rect.right, y, linePaint)
-                canvas.restore()
             }
 
             // corner brackets, gently breathing while scanning

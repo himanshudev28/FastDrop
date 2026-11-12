@@ -1,19 +1,21 @@
 <resources>
-    <!-- Dark ink, edge-to-edge, light status/nav icons -->
+    <!-- Paper by default; values-night/colors.xml flips the window background. Edge-to-edge. -->
     <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
-        <item name="android:colorPrimary">#7C6CFF</item>
-        <item name="android:colorAccent">#7C6CFF</item>
+        <item name="android:colorPrimary">#FF5A1F</item>
+        <item name="android:colorAccent">#FF5A1F</item>
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
-        <item name="android:textColorPrimary">#F3F5FA</item>
-        <item name="android:textColorSecondary">#8E95AB</item>
+        <item name="android:textColorPrimary">@color/ink</item>
+        <item name="android:textColorSecondary">@color/ink_2</item>
     </style>
     <style name="AppDialog" parent="@android:style/Theme.Material.Dialog.NoActionBar">
-        <item name="android:colorAccent">#7C6CFF</item>
+        <item name="android:colorAccent">#FF5A1F</item>
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowIsFloating">true</item>
     </style>
-    <color name="bg">#07080D</color>
+    <color name="bg">#F3F1EC</color>
+    <color name="ink">#161513</color>
+    <color name="ink_2">#5B5852</color>
 </resources>
