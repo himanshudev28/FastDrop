@@ -28,12 +28,14 @@ public final class Stores: @unchecked Sendable {
     public let dir: URL
     public let trust: TrustStore
     public let resume: ResumeStore
+    public let replay: ReplayStore
 
     public init(dir: URL) {
         self.dir = dir
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         trust = TrustStore(dir: dir)
         resume = ResumeStore(dir: dir)
+        replay = ReplayStore(dir: dir)
     }
 
     static func load<T: Decodable>(_ type: T.Type, _ url: URL) -> T? {
@@ -97,6 +99,34 @@ public final class TrustStore: @unchecked Sendable {
         keys[receiver] = hex
         Stores.save(keys, keysURL)
         lock.unlock()
+    }
+}
+
+/// Session ids of authenticated offers already seen, so a restart can't replay a captured offer.
+/// Capped at 2000 entries and pruned past 24 hours.
+public final class ReplayStore: @unchecked Sendable {
+    public static let maxEntries = 2000
+    public static let maxAge: TimeInterval = 24 * 3600
+    private let lock = NSLock()
+    private let url: URL
+    private var seenAt: [String: Date]
+
+    init(dir: URL) {
+        url = dir.appendingPathComponent("replay.json")
+        seenAt = Stores.load([String: Date].self, url) ?? [:]
+    }
+
+    /// True if `id` was already seen; otherwise records it and returns false.
+    public func seen(_ id: String, now: Date = Date()) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        seenAt = seenAt.filter { now.timeIntervalSince($0.value) <= Self.maxAge }
+        if seenAt[id] != nil { return true }
+        seenAt[id] = now
+        if seenAt.count > Self.maxEntries {
+            for (k, _) in seenAt.sorted(by: { $0.value < $1.value }).prefix(seenAt.count - Self.maxEntries) { seenAt[k] = nil }
+        }
+        Stores.save(seenAt, url)
+        return false
     }
 }
 

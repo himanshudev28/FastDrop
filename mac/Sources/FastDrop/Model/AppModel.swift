@@ -29,6 +29,7 @@ struct Batch {
     var next = 0
     var sent = 0
     var stopped = false
+    var waitingSince: Date?   // set while the app is busy with something else (incoming offer or transfer)
 }
 
 /// The "Send Text" sheet: a text/link to send to `peer` (or one picked in the sheet).
@@ -491,12 +492,37 @@ final class AppModel {
     private func advanceBatch() {
         guard var b = batch else { return }
         guard !b.stopped, b.next < b.peers.count else { finishBatch(); return }
+        // send() refuses while an offer is waiting or another transfer runs. That is temporary: wait and retry
+        // for up to a minute instead of marking every remaining device as failed.
+        if offer != nil || pending != nil || live?.state == .running {
+            let since = b.waitingSince ?? Date()
+            if Date().timeIntervalSince(since) > Self.batchWaitLimit {
+                batch?.stopped = true
+                showToast("Stopped sending to the other devices: the app stayed busy for a minute", .error)
+                finishBatch(); return
+            }
+            b.waitingSince = since
+            batch = b
+            batchStatus = "Waiting for the current transfer before sending to device \(b.next + 1) of \(b.peers.count)"
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                self?.advanceBatch()
+            }
+            return
+        }
+        b.waitingSince = nil
         let peer = devices.first { $0.id == b.peers[b.next].id } ?? b.peers[b.next]
         b.next += 1
         batch = b
         batchStatus = "Sending to \(b.next) of \(b.peers.count) devices"
-        if !send(to: peer, urls: b.urls, text: b.text) { batchStepDone(success: false, cancelled: false) }
+        if !send(to: peer, urls: b.urls, text: b.text) {
+            // send() already explained why. The same refusal would hit every remaining device, so stop here.
+            batch?.stopped = true
+            finishBatch()
+        }
     }
+
+    private static let batchWaitLimit: TimeInterval = 60
 
     /// One device of the batch finished (or failed to start).
     private func batchStepDone(success: Bool, cancelled: Bool) {

@@ -44,12 +44,16 @@ jobs:
       - name: Decode signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        shell: bash
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
             echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/fastdrop.keystore"
             echo "FASTDROP_KEYSTORE=$RUNNER_TEMP/fastdrop.keystore" >> "$GITHUB_ENV"
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "::error::KEYSTORE_BASE64 secret is not set. Refusing to publish a release APK signed with a throwaway debug key (it can't update existing installs). Add the signing secrets and re-run."
+            exit 1
           else
-            echo "::warning::KEYSTORE_BASE64 secret not set. The APK is signed with a throwaway debug key and won't update existing installs."
+            echo "::warning::KEYSTORE_BASE64 secret not set. This manual run signs the APK with a throwaway debug key; it won't update existing installs and is only attached to the run."
           fi
 
       - name: Build release APK
@@ -101,10 +105,18 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      # Ad-hoc signed unless a "FastDrop Dev" identity exists (it won't on a runner). Not notarized.
+      # Universal (arm64 + x86_64). Ad-hoc signed unless a "FastDrop Dev" identity exists (it won't on a runner).
+      # Not notarized.
       - name: Build FastDrop.app
         working-directory: mac
         run: scripts/build-app.sh
+
+      - name: Check the binary is universal
+        working-directory: mac/build
+        run: |
+          ARCHS=$(lipo -archs FastDrop.app/Contents/MacOS/FastDrop)
+          echo "architectures: $ARCHS"
+          case "$ARCHS" in *arm64*x86_64*|*x86_64*arm64*) ;; *) echo "::error::Expected a universal binary, got: $ARCHS"; exit 1 ;; esac
 
       - name: Zip and checksum
         working-directory: mac/build

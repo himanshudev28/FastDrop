@@ -109,7 +109,6 @@ public final class Receiver: @unchecked Sendable {
     private let stores: Stores
     private let lock = NSLock()
     private var sessions: [String: RxSession] = [:]
-    private var replay: [String: Date] = [:]
     private var started = false
 
     public init(identity: Identity, gate: Gate, port: UInt16 = Proto.port, stores: Stores = .shared) {
@@ -204,12 +203,7 @@ public final class Receiver: @unchecked Sendable {
         guard abs(now - ts) <= Spec.authWindowMs else { return false }
         guard Spec.verifyAuth(key: key, auth: auth, id: id, dev: dev, ts: ts,
                               filesDigest: Spec.filesDigest(files: files, text: text)) else { return false }
-        lock.lock(); defer { lock.unlock() }
-        let cutoff = Date().addingTimeInterval(-24 * 3600)
-        replay = replay.filter { $0.value > cutoff }
-        guard replay[id] == nil else { return false }
-        replay[id] = Date()
-        return true
+        return !stores.replay.seen(id)    // persisted, so a restart can't replay a captured offer
     }
 
     // MARK: control connection
@@ -243,6 +237,7 @@ public final class Receiver: @unchecked Sendable {
         }
 
         let trustedOffer = isTrustedOffer(o, id: sid, dev: dev, files: raw, text: text)
+        let knownDevice = dev.map { stores.trust.device($0) != nil } ?? false
         let resumable = v2 && dev != nil && (o["chunk"] as? NSNumber)?.intValue == Proto.chunk && text == nil
         let wantCRC = v2 && (o["crc"] as? Bool) == true && text == nil
 
@@ -259,7 +254,8 @@ public final class Receiver: @unchecked Sendable {
             accepted = true
         } else if let present {
             let offer = IncomingOffer(from: fromName, fromType: fromType, files: files, total: total, timeout: Self.offerTimeout,
-                                      text: text, code: code, trusted: trustedOffer, canTrust: dev != nil)
+                                      text: text, code: code, trusted: trustedOffer,
+                                      canTrust: dev != nil && !knownDevice)   // never replace a stored key from an offer
             c.setTimeout(0)
             present(offer)
             let r = offer.wait(ctrl: c)
@@ -275,7 +271,7 @@ public final class Receiver: @unchecked Sendable {
         c.setTimeout(10)
 
         var extra: [String: Any] = [:]
-        if pair, let dev { extra["trust"] = stores.trust.add(id: dev, name: fromName) }
+        if pair, let dev, stores.trust.device(dev) == nil { extra["trust"] = stores.trust.add(id: dev, name: fromName) }
 
         if let text {
             gate.release(); reserved = false
@@ -438,7 +434,13 @@ final class RxSession: @unchecked Sendable {
          saved: @escaping (URL, Int64) -> Void) throws {
         self.id = id; self.files = files; self.dir = dir; self.transfer = transfer; self.saved = saved
         self.crc = crc; self.stores = stores
-        resumeKeys = files.map { f in dev.map { Spec.resumeKey(dev: $0, name: f.rawName, size: f.size, mtime: f.mtime) } }
+        // Resume needs a known (positive) mtime: without it two versions of a same-size file could be spliced.
+        var seenKeys = Set<String>()
+        resumeKeys = files.map { f in
+            guard let d = dev, let m = f.mtime, m > 0 else { return nil }
+            let k = Spec.resumeKey(dev: d, name: f.rawName, size: f.size, mtime: m)
+            return seenKeys.insert(k).inserted ? k : nil     // two identical entries: only the first may resume
+        }
         fds = Array(repeating: -1, count: files.count)
         partials = Array(repeating: nil, count: files.count)
         got = Array(repeating: 0, count: files.count)
@@ -452,17 +454,32 @@ final class RxSession: @unchecked Sendable {
 
     /// Picks up partial files from earlier interrupted transfers.
     private func restore() {
+        var used = Set<String>()
         for i in files.indices where files[i].size > 0 {
             guard let key = resumeKeys[i], let r = stores.resume.record(key), r.size == files[i].size,
+                  belongs(r.path, toFile: i, key: key), !used.contains(r.path),
                   let attrs = try? FileManager.default.attributesOfItem(atPath: r.path),
                   (attrs[.size] as? NSNumber)?.int64Value == files[i].size else { continue }
             let set = Spec.indices(of: r.chunks, limit: Spec.chunkCount(size: files[i].size))
             guard !set.isEmpty else { continue }
             done[i] = set
             partials[i] = URL(fileURLWithPath: r.path)
+            used.insert(r.path)
             got[i] = set.reduce(Int64(0)) { $0 + Spec.chunkLength(index: $1, size: files[i].size) }
             presentBytes += got[i]
         }
+    }
+
+    /// A resume record's partial must be one this file (and key) could have produced: same folder, same
+    /// name and the key's tag. Otherwise a stale or foreign record could point at someone else's data.
+    private func belongs(_ path: String, toFile i: Int, key: String) -> Bool {
+        let rel = files[i].name
+        let parent = (rel as NSString).deletingLastPathComponent
+        let folder = parent.isEmpty ? dir : dir.appendingPathComponent(parent, isDirectory: true)
+        let u = URL(fileURLWithPath: path)
+        let name = u.lastPathComponent
+        return u.deletingLastPathComponent().standardizedFileURL.path == folder.standardizedFileURL.path
+            && name.hasPrefix(".\((rel as NSString).lastPathComponent).\(key.prefix(12)).") && name.hasSuffix(".fdpart")
     }
 
     /// `have` for the accept reply: done chunk ranges of reopened partials, by file index.
@@ -496,7 +513,8 @@ final class RxSession: @unchecked Sendable {
         let folder = parent.isEmpty ? dir : dir.appendingPathComponent(parent, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let tag = resumeKeys[i].map { String($0.prefix(12)) } ?? String(id.prefix(8))
-        let tmp = folder.appendingPathComponent(".\((rel as NSString).lastPathComponent).\(tag).fdpart")
+        // unique per file slot, so two offered files called x.bin never share one partial
+        let tmp = folder.appendingPathComponent(".\((rel as NSString).lastPathComponent).\(tag).\(i).fdpart")
         let fd = open(tmp.path, O_RDWR | O_CREAT | O_TRUNC, 0o644)
         guard fd >= 0 else { throw FDError.errno("Can't create \(rel)") }
         if files[i].size > 0 { _ = ftruncate(fd, off_t(files[i].size)) }
