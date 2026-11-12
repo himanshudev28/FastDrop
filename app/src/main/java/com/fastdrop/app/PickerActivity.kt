@@ -405,17 +405,23 @@ class PickerActivity : Activity() {
 
     // ---------- tabs ----------
 
+    /**
+     * The sliding pill is drawn in onDraw rather than added as a child view. A plain View child with
+     * match_parent height would make this wrap_content bar take all the free height, leaving the
+     * list area below it zero tall.
+     */
     private inner class TabBar : FrameLayout(this@PickerActivity) {
         private val labels = ArrayList<TextView>()
-        private val indicator = View(this@PickerActivity)
+        private val indicator = Ui.gradient(Theme.BRAND, dp(18).toFloat())
         private val pad = dp(4)
         private var index = 0
+        private var pos = 0f
+        private var anim: android.animation.ValueAnimator? = null
 
         init {
+            setWillNotDraw(false)
             background = PickUi.rounded(context, Theme.alpha(Theme.SURFACE_2, 0.9f), 22, Theme.STROKE)
             setPadding(pad, pad, pad, pad)
-            indicator.background = Ui.gradient(Theme.BRAND, dp(18).toFloat())
-            addView(indicator, LayoutParams(0, -1))
             val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
             val h = dp(if (Ui.tv(context)) 48 else 40)
             defs.forEachIndexed { i, d ->
@@ -433,23 +439,33 @@ class PickerActivity : Activity() {
             addView(row, LayoutParams(-1, -2))
         }
 
-        override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
-            super.onSizeChanged(w, h, ow, oh)
-            place(false)
+        override fun onDraw(c: android.graphics.Canvas) {
+            val tw = (width - 2 * pad) / defs.size.toFloat()
+            if (tw <= 0f) return
+            val l = pad + pos * tw
+            indicator.setBounds(l.toInt(), pad, (l + tw).toInt(), height - pad)
+            indicator.draw(c)
+        }
+
+        override fun onDetachedFromWindow() {
+            super.onDetachedFromWindow()
+            anim?.cancel()
         }
 
         private fun place(animate: Boolean) {
-            val inner = width - 2 * pad
-            if (inner <= 0) return
-            val tw = inner / defs.size
-            val lp = indicator.layoutParams
-            if (lp.width != tw) { lp.width = tw; indicator.layoutParams = lp }
-            val x = (tw * index).toFloat()
-            indicator.animate().cancel()
-            if (animate && Anim.on(context)) {
-                indicator.animate().translationX(x).setDuration(Theme.DUR)
-                    .setInterpolator(Theme.EASE_OUT).start()
-            } else indicator.translationX = x
+            anim?.cancel()
+            val to = index.toFloat()
+            if (animate && Anim.on(context) && isLaidOut) {
+                anim = android.animation.ValueAnimator.ofFloat(pos, to).apply {
+                    duration = Theme.DUR
+                    interpolator = Theme.EASE_OUT
+                    addUpdateListener { pos = it.animatedValue as Float; invalidate() }
+                    start()
+                }
+            } else {
+                pos = to
+                invalidate()
+            }
         }
 
         fun select(i: Int, animate: Boolean) {
