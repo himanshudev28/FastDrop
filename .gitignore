@@ -1,0 +1,13 @@
+.gradle/
+build/
+app/build/
+local.properties
+*.apk
+
+# local-only
+backup-v1/
+graphify-out/
+.DS_Store
+.idea/
+*.iml
+.kotlin/

@@ -1,0 +1,19 @@
+<resources>
+    <!-- Dark ink, edge-to-edge, light status/nav icons -->
+    <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:colorPrimary">#7C6CFF</item>
+        <item name="android:colorAccent">#7C6CFF</item>
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:textColorPrimary">#F3F5FA</item>
+        <item name="android:textColorSecondary">#8E95AB</item>
+    </style>
+    <style name="AppDialog" parent="@android:style/Theme.Material.Dialog.NoActionBar">
+        <item name="android:colorAccent">#7C6CFF</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsFloating">true</item>
+    </style>
+    <color name="bg">#07080D</color>
+</resources>

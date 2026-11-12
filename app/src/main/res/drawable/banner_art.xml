@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- TV banner artwork (flat colors so it works on every API): badge, bolt and FastDrop wordmark -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp" android:height="180dp" android:viewportWidth="320" android:viewportHeight="180">
+    <path android:fillColor="#26FFFFFF" android:pathData="M40,48H116A14,14 0 0 1 130,62V118A14,14 0 0 1 116,132H40A14,14 0 0 1 26,118V62A14,14 0 0 1 40,48Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M82,56L54,94H74L70,124L100,84H80L82,56Z" />
+    <!-- wordmark: F A S T -->
+    <path android:fillColor="#FFFFFF" android:pathData="M150,66h24v8h-16v8h14v8h-14v16h-8z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M188,66h12l12,40h-9l-2.5,-9h-13l-2.5,9h-9zM188.5,90h9l-4.5,-16z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M216,66h22v8h-14v8h14v24h-22v-8h14v-8h-14z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M242,66h26v8h-9v32h-8v-32h-9z" />
+    <path android:fillColor="#B3FFFFFF" android:pathData="M150,114h118v4h-118z" />
+</vector>

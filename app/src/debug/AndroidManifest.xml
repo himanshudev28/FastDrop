@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: lets adb trigger a send for automated testing. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver android:name=".DebugSendReceiver" android:exported="true" />
+    </application>
+</manifest>
