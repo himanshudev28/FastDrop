@@ -50,6 +50,23 @@ class SettingsScreen(host: MainActivity) : Screen(host) {
         add(nameBox)
         renderName()
 
+        // Appearance (phone only: TV is always dark)
+        if (!tvMode) {
+            section(R.string.set_sec_appearance)
+            val box = LinearLayout(c).apply {
+                orientation = LinearLayout.VERTICAL
+                val g = Ui.gutter(c)
+                setPadding(g, dp(4), g, dp(12))
+            }
+            box.addView(Ui.text(c, s(R.string.set_theme), Type.ROW), lp())
+            box.addView(Ui.text(c, s(if (Build.VERSION.SDK_INT >= 29) R.string.set_theme_hint else R.string.set_theme_hint_old), Type.META)
+                .apply { setPadding(0, dp(2), 0, dp(10)) }, lp())
+            val options = listOf(Theme.APPEARANCE_SYSTEM, Theme.APPEARANCE_LIGHT, Theme.APPEARANCE_DARK)
+            box.addView(Ui.segmented(c, listOf(s(R.string.set_theme_system), s(R.string.set_theme_light), s(R.string.set_theme_dark)),
+                options.indexOf(Theme.appearance(c)).coerceAtLeast(0)) { applyAppearance(options[it]) }, lp())
+            add(box)
+        }
+
         // Receiving
         section(R.string.set_sec_receiving)
         add(Ui.text(c, s(R.string.set_accept_from), Type.ROW).apply { setPadding(Ui.gutter(c), dp(4), Ui.gutter(c), dp(4)) })
@@ -93,23 +110,6 @@ class SettingsScreen(host: MainActivity) : Screen(host) {
         keepBox.addView(Ui.segmented(c, listOf(s(R.string.set_keep_7), s(R.string.set_keep_30), s(R.string.set_keep_forever)),
             keepOptions.indexOf(HistoryStore.keepDays()).let { if (it < 0) 1 else it }) { HistoryStore.setKeepDays(keepOptions[it]) }, lp())
         add(keepBox)
-
-        // Appearance (phone only: TV is always dark)
-        if (!tvMode) {
-            section(R.string.set_sec_appearance)
-            val box = LinearLayout(c).apply {
-                orientation = LinearLayout.VERTICAL
-                val g = Ui.gutter(c)
-                setPadding(g, dp(4), g, dp(12))
-            }
-            box.addView(Ui.text(c, s(R.string.set_theme), Type.ROW), lp())
-            box.addView(Ui.text(c, s(if (Build.VERSION.SDK_INT >= 29) R.string.set_theme_hint else R.string.set_theme_hint_old), Type.META)
-                .apply { setPadding(0, dp(2), 0, dp(10)) }, lp())
-            val options = listOf(Theme.APPEARANCE_SYSTEM, Theme.APPEARANCE_LIGHT, Theme.APPEARANCE_DARK)
-            box.addView(Ui.segmented(c, listOf(s(R.string.set_theme_system), s(R.string.set_theme_light), s(R.string.set_theme_dark)),
-                options.indexOf(Theme.appearance(c)).coerceAtLeast(0)) { applyAppearance(options[it]) }, lp())
-            add(box)
-        }
 
         // Apps
         section(R.string.set_sec_apps)
