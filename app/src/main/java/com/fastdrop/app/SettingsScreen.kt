@@ -21,6 +21,8 @@ class SettingsScreen(host: MainActivity) : Screen(host) {
 
     private lateinit var nameBox: LinearLayout
     private lateinit var permBox: LinearLayout
+    private lateinit var trustBox: LinearLayout
+    private lateinit var autoDesc: android.widget.TextView
     private var firstRow: View? = null
     private var sigPerms: String? = null
 
@@ -52,12 +54,25 @@ class SettingsScreen(host: MainActivity) : Screen(host) {
         // Receiving
         add(Ui.label(c, "Receiving"), 8)
         val recv = Ui.card(c, 6)
-        recv.addView(Ui.toggleRow(c, "Auto-accept",
-            "Receive files without asking. Anyone nearby can send while this is on.", Hub.autoAccept) {
-            Hub.autoAccept = it
-            Hub.changed()
+        val autoBox = LinearLayout(c).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(12))
+        }
+        autoBox.addView(Ui.text(c, "Auto-accept", 16f, Theme.TEXT, Theme.MEDIUM), lp())
+        autoDesc = Ui.text(c, autoDescription(Hub.autoMode), 13f, Theme.MUTED)
+        autoBox.addView(autoDesc, lp(top = 3, bottom = 12))
+        autoBox.addView(Ui.segmented(c, listOf("Ask every time", "Trusted devices", "Everyone"), Hub.autoMode) {
+            Hub.autoMode = it
+            autoDesc.text = autoDescription(it)
         }, lp())
+        recv.addView(autoBox, lp())
         add(recv)
+
+        // Trusted devices
+        add(Ui.label(c, "Trusted devices"), 8)
+        trustBox = Ui.card(c, 6)
+        add(trustBox)
+        renderTrusted()
 
         // Speed
         add(Ui.label(c, "Speed"), 8)
@@ -72,6 +87,9 @@ class SettingsScreen(host: MainActivity) : Screen(host) {
         val sel = STREAM_OPTIONS.indexOf(Hub.streams).let { if (it < 0) 2 else it }
         streamsBox.addView(Ui.segmented(c, STREAM_OPTIONS.map { it.toString() }, sel) { Hub.streams = STREAM_OPTIONS[it] }, lp())
         speed.addView(streamsBox, lp())
+        speed.addView(Ui.divider(c))
+        speed.addView(Ui.toggleRow(c, "Verify data (CRC32)",
+            "Checks every chunk. Slower: uses more CPU on both devices.", Hub.verifyCrc) { Hub.verifyCrc = it }, lp())
         if (Links.p2pSupported(c)) {
             speed.addView(Ui.divider(c))
             speed.addView(Ui.toggleRow(c, "Wi-Fi Direct on 5 GHz",
@@ -113,8 +131,38 @@ class SettingsScreen(host: MainActivity) : Screen(host) {
     }
 
     private fun versionName(): String = try {
-        ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "2.0"
-    } catch (_: Exception) { "2.0" }
+        ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "2.1"
+    } catch (_: Exception) { "2.1" }
+
+    private fun autoDescription(mode: Int): String = when (mode) {
+        Hub.AUTO_ASK -> "Always ask before receiving."
+        Hub.AUTO_EVERYONE -> "Receive from anyone nearby without asking."
+        else -> "Receive without asking only from devices you trust. Others still ask."
+    }
+
+    // ---------------------------------------------------------------- trusted devices
+
+    private fun renderTrusted() {
+        val c = ctx
+        trustBox.removeAllViews()
+        val list = Trust.list()
+        if (list.isEmpty()) {
+            trustBox.addView(Ui.text(c, "None yet. Tick \"Always accept\" when someone sends you something.", 14f, Theme.MUTED)
+                .apply { setPadding(dp(12), dp(12), dp(12), dp(12)) }, lp())
+            return
+        }
+        val fmt = android.text.format.DateFormat.getMediumDateFormat(c)
+        list.forEachIndexed { i, e ->
+            if (i > 0) trustBox.addView(Ui.divider(c))
+            val remove = Ui.secondaryButton(c, "Remove") {
+                Trust.remove(e.dev)
+                renderTrusted()
+                Hub.changed()
+            }
+            trustBox.addView(Ui.row(c, R.drawable.ic_shield, Theme.SUCCESS, e.name,
+                "Added ${fmt.format(java.util.Date(e.added))}", remove, null), lp())
+        }
+    }
 
     // ---------------------------------------------------------------- device name
 

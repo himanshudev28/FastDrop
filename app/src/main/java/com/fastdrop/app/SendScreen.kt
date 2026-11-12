@@ -96,7 +96,7 @@ internal object ScreenKit {
     /** A bottom sheet with one text field. Enter on the keyboard confirms too. */
     fun inputSheet(
         host: MainActivity, title: String, hint: String, initial: String, inputType: Int,
-        okLabel: String, onOk: (String) -> Unit,
+        okLabel: String, multiline: Boolean = false, onOk: (String) -> Unit,
     ): Sheets.Handle {
         val ctx: Context = host
         val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
@@ -105,15 +105,15 @@ internal object ScreenKit {
             setText(initial)
             setSelection(initial.length)
             this.hint = hint
-            this.inputType = inputType
-            setSingleLine()
+            this.inputType = if (multiline) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE else inputType
+            if (multiline) { minLines = 3; maxLines = 8; gravity = Gravity.TOP or Gravity.START } else setSingleLine()
             setTextColor(Theme.TEXT)
             setHintTextColor(Theme.FAINT)
             textSize = 17f
             typeface = Theme.MEDIUM
             val p = dp(ctx, 14)
             setPadding(p, p, p, p)
-            imeOptions = EditorInfo.IME_ACTION_DONE
+            if (!multiline) imeOptions = EditorInfo.IME_ACTION_DONE
             background = GradientDrawable().apply {
                 cornerRadius = dp(ctx, 14).toFloat()
                 setColor(Theme.SURFACE_2)
@@ -193,6 +193,11 @@ class SendScreen(host: MainActivity) : Screen(host) {
     private var qrOpen = false
     private var scanning = false
     private var lastSelRef: List<SendItem>? = null
+    private var lastSelText: String? = null
+    /** Devices ticked for a multi-device send (long-press a device to toggle). */
+    private val multi = LinkedHashSet<String>()
+    private lateinit var multiBar: View
+    private lateinit var multiBtn: TextView
     private var lastBlipSig = ""
     private var lastQr: String? = null
     private val transition: LayoutTransition by lazy {
@@ -211,7 +216,7 @@ class SendScreen(host: MainActivity) : Screen(host) {
 
     override fun build(): View {
         entered = false
-        lastSelRef = null; lastBlipSig = ""; lastQr = null
+        lastSelRef = null; lastSelText = null; lastBlipSig = ""; lastQr = null
         val wide = Ui.wide(ctx)
         val root = FrameLayout(ctx)
         root.setBackgroundColor(Theme.BG)
@@ -224,6 +229,7 @@ class SendScreen(host: MainActivity) : Screen(host) {
         val selCard = buildSelectionCard()
         val radarBox = buildRadar()
         val devicesCard = buildDevices()
+        multiBar = buildMultiBar()
         val actions = buildActions()
         buildQrPanel()
         locBanner = banner(R.drawable.ic_wifi_direct, "Location is off",
@@ -244,7 +250,7 @@ class SendScreen(host: MainActivity) : Screen(host) {
             val right = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
             left.addView(selCard, lp()); left.addView(radarBox, lp(bottomDp = 4)); left.addView(statusText, lp())
             right.addView(locBanner, lp()); right.addView(permBanner, lp())
-            right.addView(devicesCard, lp()); right.addView(actions, lp()); right.addView(qrPanel, lp())
+            right.addView(multiBar, lp()); right.addView(devicesCard, lp()); right.addView(actions, lp()); right.addView(qrPanel, lp())
             cols.addView(left, LinearLayout.LayoutParams(0, ScreenKit.WRAP, 1f).apply { marginEnd = gap / 2 })
             cols.addView(right, LinearLayout.LayoutParams(0, ScreenKit.WRAP, 1f).apply { marginStart = gap / 2 })
             content.addView(cols, lp())
@@ -254,6 +260,7 @@ class SendScreen(host: MainActivity) : Screen(host) {
             content.addView(radarBox, lp(bottomDp = 4))
             content.addView(statusText, lp())
             content.addView(locBanner, lp()); content.addView(permBanner, lp())
+            content.addView(multiBar, lp())
             content.addView(devicesCard, lp())
             content.addView(actions, lp())
             content.addView(qrPanel, lp())
@@ -301,6 +308,18 @@ class SendScreen(host: MainActivity) : Screen(host) {
         return card
     }
 
+    private fun buildMultiBar(): View {
+        val card = Ui.card(ctx, 10)
+        val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+        multiBtn = Ui.primaryButton(ctx, "Send to 2 devices", Theme.SEND, R.drawable.ic_send) { sendMulti() }
+        row.addView(Ui.secondaryButton(ctx, "Clear") { multi.clear(); refresh() },
+            LinearLayout.LayoutParams(ScreenKit.WRAP, ScreenKit.WRAP).apply { marginEnd = ScreenKit.dp(ctx, 10) })
+        row.addView(multiBtn, LinearLayout.LayoutParams(0, ScreenKit.WRAP, 1f))
+        card.addView(row, LinearLayout.LayoutParams(ScreenKit.MATCH, ScreenKit.WRAP))
+        card.visibility = View.GONE
+        return card
+    }
+
     private fun buildActions(): View {
         val card = Ui.card(ctx, 8)
         fun add(v: View, divider: Boolean = true) {
@@ -312,6 +331,10 @@ class SendScreen(host: MainActivity) : Screen(host) {
             add(Ui.row(ctx, R.drawable.ic_scan, Theme.ACCENT, "Scan QR code",
                 "Join the other device's code", null) { host.scanQr(true) })
         }
+        add(Ui.row(ctx, R.drawable.ic_edit, Theme.CAT_FILES, "Send text",
+            "Type a message or paste a link", null) { typeText() })
+        add(Ui.row(ctx, R.drawable.ic_copy, Theme.CAT_FILES, "Send clipboard",
+            "Send whatever you last copied", null) { host.sendClipboard() })
         qrRow = Ui.row(ctx, R.drawable.ic_qr, Theme.ACCENT_2, "Show my QR",
             "Let another device scan this one", null) { toggleQr() }
         add(qrRow)
@@ -362,13 +385,32 @@ class SendScreen(host: MainActivity) : Screen(host) {
     // ---------------------------------------------------------------- actions
 
     private fun edit() {
-        host.openPicker(PickerActivity.TAB_PHOTOS) { refresh() }
+        val t = Hub.selectionText
+        if (t != null) typeText(t) else host.openPicker(PickerActivity.TAB_PHOTOS) { refresh() }
+    }
+
+    private fun typeText(initial: String = "") {
+        sheet = ScreenKit.inputSheet(host, "Send text", "Message or link", initial,
+            InputType.TYPE_CLASS_TEXT, "Next", multiline = true) { host.setSendText(it) }
+    }
+
+    private fun toggleMulti(id: String) {
+        if (!multi.remove(id)) multi.add(id)
+        refresh()
+    }
+
+    private fun sendMulti() {
+        val devs = multi.mapNotNull { Hub.devices[it] }
+        multi.clear()
+        refresh()
+        host.sendToMany(devs)
     }
 
     private fun send(d: Device) {
-        if (Hub.selection.isEmpty()) {
+        if (multi.isNotEmpty()) { toggleMulti(d.id); return }
+        if (!host.hasPayload()) {
             host.openPicker(PickerActivity.TAB_PHOTOS) {
-                if (Hub.selection.isNotEmpty()) host.sendTo(Hub.devices[d.id] ?: d)
+                if (host.hasPayload()) host.sendTo(Hub.devices[d.id] ?: d)
             }
             return
         }
@@ -466,8 +508,11 @@ class SendScreen(host: MainActivity) : Screen(host) {
         refreshSelection()
         val devs = Hub.devices.values.toList().sortedWith(
             compareBy<Device>({ rank(it.via) }, { it.name.lowercase() }, { it.id }))
+        multi.retainAll(devs.map { it.id }.toSet())
         refreshRadar(devs)
         refreshList(devs)
+        multiBtn.text = "Send to ${multi.size} device${if (multi.size == 1) "" else "s"}"
+        ScreenKit.setShown(multiBar, multi.isNotEmpty())
         ScreenKit.setShown(locBanner, Links.locationOffBlocksDiscovery(ctx))
         ScreenKit.setShown(permBanner, Links.p2pSupported(ctx) && Links.requiredPermissions().isNotEmpty() && !Links.hasPermissions(ctx))
         if (Links.approximateOnly(ctx)) Ui.setRowText(permBanner, "Choose Precise location", "Wi‑Fi Direct needs Precise location. Tap to open settings.")
@@ -487,8 +532,15 @@ class SendScreen(host: MainActivity) : Screen(host) {
 
     private fun refreshSelection() {
         val sel = Hub.selection
-        if (sel === lastSelRef) return
-        lastSelRef = sel
+        val txt = Hub.selectionText
+        if (sel === lastSelRef && txt == lastSelText) return
+        lastSelRef = sel; lastSelText = txt
+        if (txt != null) {
+            selTitle.text = "Text · ${txt.length} character${if (txt.length == 1) "" else "s"}"
+            selSub.text = txt.replace('\n', ' ').take(80)
+            selAction.text = "Edit"
+            return
+        }
         if (sel.isEmpty()) {
             selTitle.text = "Nothing selected"
             selSub.text = "Choose what to send first"
@@ -552,7 +604,7 @@ class SendScreen(host: MainActivity) : Screen(host) {
                 Ui.label(ctx, title).apply { setPadding(ScreenKit.dp(ctx, 14), ScreenKit.dp(ctx, 10), 0, ScreenKit.dp(ctx, 2)) }
             })
             for (d in group) {
-                val sig = "${d.name}|${d.ip}|${d.type}|${d.via}"
+                val sig = "${d.name}|${d.ip}|${d.type}|${d.via}|${d.id in multi}"
                 entries.add(Entry("dev:${d.id}", sig) { deviceRow(d) })
             }
         }
@@ -630,13 +682,18 @@ class SendScreen(host: MainActivity) : Screen(host) {
         val icon = when (d.type) { "tv" -> R.drawable.ic_tv; "laptop" -> R.drawable.ic_laptop; else -> R.drawable.ic_phone }
         val color = tint(d.via)
         val chipIcon = when (d.via) { Device.VIA_LAN -> R.drawable.ic_wifi; Device.VIA_P2P -> R.drawable.ic_wifi_direct; else -> R.drawable.ic_qr }
-        val chip = Ui.chip(ctx, Links.linkLabel(d.via), color, chipIcon)
+        val picked = d.id in multi
+        val chip = if (picked) Ui.chip(ctx, "Selected", Theme.SUCCESS, R.drawable.ic_check)
+        else Ui.chip(ctx, Links.linkLabel(d.via), color, chipIcon)
         val sub = when (d.via) {
             Device.VIA_LAN -> d.ip
             Device.VIA_P2P -> "Tap to connect over Wi‑Fi Direct"
             else -> if (d.join?.hasNetwork == true) "Joins its Wi‑Fi when you send" else d.ip
         }
-        return Ui.row(ctx, icon, color, d.name, sub, chip) { send(d) }
+        val row = Ui.row(ctx, icon, if (picked) Theme.SUCCESS else color, d.name, sub, chip) { send(d) }
+        // Long-press (or hold OK on a remote) to pick several devices.
+        row.setOnLongClickListener { toggleMulti(d.id); true }
+        return row
     }
 
     private fun emptyState(wifiOn: Boolean): View {

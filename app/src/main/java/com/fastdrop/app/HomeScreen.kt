@@ -427,6 +427,18 @@ class HomeScreen(host: MainActivity) : Screen(host) {
                 val pkg = tag?.pkg
                 if (pkg != null) Thumbs.app(iv, pkg) else Thumbs.file(iv, "app.apk", null, dp(48))
                 withLead(row, iv, 44)
+            } else if (e.file?.text != null) {
+                // Received text / link: Copy, and Open when the whole text is an http(s) URL.
+                val r = e.file
+                val txt = r.text ?: ""
+                val acts = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL }
+                acts.addView(Ui.secondaryButton(c, "Copy") { host.copyText("Text", txt) })
+                if (ProtoV2.isHttpUrl(txt)) {
+                    acts.addView(Ui.secondaryButton(c, "Open") { host.openUrl(txt) },
+                        LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(8) })
+                }
+                row = Ui.row(c, R.drawable.ic_link, Theme.ACCENT_2, r.name,
+                    "Text · from ${r.from} · ${ago(r.at)}", acts) { host.copyText("Text", txt) }
             } else {
                 val r = e.file!!
                 row = Ui.row(c, null, Theme.ACCENT, r.name.substringAfterLast('/'),

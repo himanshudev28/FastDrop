@@ -40,7 +40,19 @@ class Device(
     val join: JoinInfo? = null,
     val p2pAddress: String? = null,
 ) {
+    /** Protocol version it announced: 0 = unknown (Wi-Fi Direct / QR), 1 = FastDrop 2.0, 2 = FastDrop 2.1+. */
+    @Volatile var ver: Int = 0
+    @Volatile var caps: Set<String> = emptySet()
+
     val needsLink: Boolean get() = via != VIA_LAN
+
+    /** Records the protocol version and capabilities from a HELLO / announce JSON. */
+    fun withInfo(o: JSONObject): Device {
+        ver = o.optInt("v", 1)
+        val c = o.optJSONArray("caps")
+        if (c != null) caps = (0 until c.length()).map { c.optString(it) }.toSet()
+        return this
+    }
 
     companion object {
         const val VIA_LAN = "lan"
@@ -55,12 +67,15 @@ class AppTag(val label: String, val pkg: String, val version: String)
 class SendItem(
     val name: String, val size: Long, val uri: Uri?, val file: java.io.File?,
     val app: AppTag? = null,
+    val mtime: Long = 0L,              // source last-modified (ms), 0 = unknown; only used for resume keys
 )
 
+/** A received file, or (when [text] is set) received text / a link. */
 class Received(
     val name: String, val size: Long, @Volatile var uri: Uri?, val from: String,
     val app: AppTag? = null,
     val at: Long = System.currentTimeMillis(),
+    val text: String? = null,
 )
 
 class RxFile(val name: String, val size: Long, val app: AppTag? = null)
@@ -72,8 +87,14 @@ class Transfer(
     val outgoing: Boolean, val peer: String, val total: Long, val files: Int,
     val via: String = Device.VIA_LAN,              // how the link was made, for the UI ("Wi-Fi Direct")
     val names: List<String> = emptyList(),         // file names, for the UI (first few shown)
+    val text: String? = null,                      // outgoing text transfer (for Retry)
 ) {
     val done = AtomicLong()
+    /** Bytes that were already on the receiver when this session began (resume). Speed/ETA ignore them. */
+    @Volatile var baseline = 0L
+    val resumed: Boolean get() = baseline > 0
+    /** Bytes moved in this session only. */
+    val sessionDone: Long get() = (done.get() - baseline).coerceAtLeast(0)
     val startedAt = SystemClock.elapsedRealtime()
     @Volatile var lastProgressAt = startedAt
     /** Sender: every byte has been written; only the receiver's final ack is outstanding. */
@@ -98,8 +119,20 @@ class Transfer(
 }
 
 /** A file offer waiting for the user to tap Accept / Decline. */
-class IncomingOffer(val from: String, val fromType: String, val files: List<RxFile>, val total: Long) {
+class IncomingOffer(
+    val from: String, val fromType: String, val files: List<RxFile>, val total: Long,
+    /** Text / link offer (no files). */
+    val text: String? = null,
+    /** 4-digit confirmation code (same value the sender shows). Empty for protocol 1 senders. */
+    val code: String = "",
+    /** The offer carried a valid HMAC from a trusted device. */
+    val trusted: Boolean = false,
+    /** The sender can be trusted (protocol 2 with a device id) and isn't yet. */
+    val canTrust: Boolean = false,
+) {
     private val latch = CountDownLatch(1)
+    /** Set by the UI ("Always accept from X") before respond(true). */
+    @Volatile var alwaysAccept = false
     @Volatile var accepted = false
     @Volatile var answered = false
     @Volatile var timedOut = false
@@ -146,6 +179,13 @@ object Hub {
     @Volatile var pendingThread: Thread? = null
     @Volatile var linking = false
     @Volatile var selection: List<SendItem> = emptyList()
+        set(v) { field = v; if (v.isNotEmpty()) selectionText = null }     // files and text are exclusive
+    /** Text / link / clipboard waiting to be sent instead of files (selection is empty while this is set). */
+    @Volatile var selectionText: String? = null
+    /** Confirmation code ("0427") shown on the sender while waiting for Accept; null when not applicable. */
+    @Volatile var pendingCode: String? = null
+    /** Multi-device send progress, e.g. "Device 2 of 3"; null for single sends. */
+    @Volatile var multiInfo: String? = null
     /** The incoming offer waiting for Accept / Decline (set by Server; notification buttons answer it). */
     @Volatile var offer: IncomingOffer? = null
 
@@ -164,9 +204,28 @@ object Hub {
     var myName: String
         get() = prefs.getString("name", null) ?: defaultName()
         set(v) { prefs.edit().putString("name", v.trim().take(40)).apply() }
+    const val AUTO_ASK = 0
+    const val AUTO_TRUSTED = 1
+    const val AUTO_EVERYONE = 2
+
+    /**
+     * Auto-accept mode (AUTO_ASK / AUTO_TRUSTED / AUTO_EVERYONE). Migration: an old `auto = true`
+     * becomes Everyone, anything else the new default, Trusted devices.
+     */
+    var autoMode: Int
+        get() = if (prefs.contains("automode")) prefs.getInt("automode", AUTO_TRUSTED).coerceIn(0, 2)
+        else if (prefs.getBoolean("auto", false)) AUTO_EVERYONE else AUTO_TRUSTED
+        set(v) { prefs.edit().putInt("automode", v.coerceIn(0, 2)).apply(); changed() }
+    /** Legacy switch view of [autoMode]: on = Everyone. Turning it off leaves "Ask" alone, otherwise falls back to Trusted. */
     var autoAccept: Boolean
-        get() = prefs.getBoolean("auto", false)
-        set(v) { prefs.edit().putBoolean("auto", v).apply() }
+        get() = autoMode == AUTO_EVERYONE
+        set(v) { if (v) autoMode = AUTO_EVERYONE else if (autoMode == AUTO_EVERYONE) autoMode = AUTO_TRUSTED }
+    /** Could an offer be accepted without a prompt right now (so we are receivable with the UI closed)? */
+    val autoActive: Boolean get() = autoMode == AUTO_EVERYONE || (autoMode == AUTO_TRUSTED && Trust.hasAny())
+    /** "Verify data (CRC32)": costs CPU on both sides, off by default. */
+    var verifyCrc: Boolean
+        get() = prefs.getBoolean("crc", false)
+        set(v) { prefs.edit().putBoolean("crc", v).apply() }
     var streams: Int
         get() = prefs.getInt("streams", 4)
         set(v) { prefs.edit().putInt("streams", v).apply() }
@@ -200,16 +259,18 @@ object Hub {
         }
         // Temp copies from earlier runs (made for un-seekable shared streams).
         thread(isDaemon = true) { Storage.clearSendCache(app) }
+        // Resume records (and their partial files) older than 7 days.
+        thread(isDaemon = true) { try { Resume.prune(app) } catch (_: Exception) { } }
         Server.start()
         Discovery.start()
         thread(name = "watchdog", isDaemon = true) { watchdog() }
     }
 
     /** Can someone send to us right now? */
-    fun receivable() = listener != null || autoAccept
+    fun receivable() = listener != null || autoActive
 
     fun info(): JSONObject = JSONObject()
-        .put("app", "fastdrop").put("v", 1)
+        .put("app", "fastdrop").put("v", ProtoV2.VERSION).put("caps", org.json.JSONArray(ProtoV2.CAPS))
         .put("id", myId).put("name", myName).put("type", myType)
         .put("port", Proto.PORT).put("receivable", receivable())
 
@@ -244,6 +305,8 @@ object Hub {
                 Device(d.id, d.name, d.type, d.ip, d.port, d.lastSeen, d.manual, d.via, d.join, old.p2pAddress)
             else -> d
         }
+        if (old != null && merged !== old && merged.ver == 0) { merged.ver = old.ver; merged.caps = old.caps }
+        if (d.ver > 0) { merged.ver = d.ver; merged.caps = d.caps }
         devices[d.id] = merged
         if (old == null || old.name != merged.name || old.ip != merged.ip || old.via != merged.via) changed()
     }
@@ -282,6 +345,7 @@ object Hub {
     }
 
     fun cancel() {
+        Sender.queueAborted = true
         Io.closeQuietly(pendingSocket)
         if (linking) try { pendingThread?.interrupt() } catch (_: Exception) { }
         transfer?.let { if (it.running) end(it, State.CANCELLED, "Cancelled") }
@@ -307,10 +371,11 @@ object Hub {
             State.RUNNING -> {
                 val pct = if (t.total > 0) t.done.get() * 100 / t.total else 100
                 val secs = (SystemClock.elapsedRealtime() - t.startedAt) / 1000.0
-                val sp = if (secs > 0) t.done.get() / secs else 0.0
+                val sp = if (secs > 0) t.sessionDone / secs else 0.0
                 "$dir ${t.peer} • $pct% • ${Io.speed(sp)}"
             }
-            State.DONE -> "Done: ${t.files} file(s), ${Io.bytes(t.total)} ${if (t.outgoing) "sent to" else "from"} ${t.peer}"
+            State.DONE -> if (t.text != null || (t.files == 0 && t.total == 0L)) "Text ${if (t.outgoing) "sent to" else "from"} ${t.peer}"
+            else "Done: ${t.files} file(s), ${Io.bytes(t.total)} ${if (t.outgoing) "sent to" else "from"} ${t.peer}"
             else -> t.message
         }
     }

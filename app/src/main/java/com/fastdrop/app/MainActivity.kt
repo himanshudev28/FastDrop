@@ -21,8 +21,6 @@ import android.view.WindowManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
-import java.io.File
-import java.util.UUID
 import kotlin.concurrent.thread
 
 /**
@@ -343,7 +341,7 @@ class MainActivity : Activity(), Hub.Listener {
 
     /** Home "Send": nothing picked yet means pick first, otherwise straight to device choice. */
     fun startSend() {
-        if (Hub.selection.isEmpty()) openPicker(PickerActivity.TAB_PHOTOS, null)
+        if (!hasPayload()) openPicker(PickerActivity.TAB_PHOTOS, null)
         else if (current !is SendScreen) push(SendScreen(this))
     }
 
@@ -374,18 +372,56 @@ class MainActivity : Activity(), Hub.Listener {
         }
     }
 
+    /** Something to send: picked files, or text / a link / the clipboard. */
+    fun hasPayload(): Boolean = Hub.selection.isNotEmpty() || !Hub.selectionText.isNullOrEmpty()
+
     fun sendTo(d: Device) {
-        if (Hub.selection.isEmpty()) {
+        if (!hasPayload()) {
             openPicker(PickerActivity.TAB_PHOTOS) { sendTo(d) }
             return
         }
-        if (d.needsLink) ensureLinkPermissions { startSending(d) } else startSending(d)
+        if (d.needsLink) ensureLinkPermissions { startSending(listOf(d)) } else startSending(listOf(d))
     }
 
-    private fun startSending(d: Device) {
-        val sel = Hub.selection
-        if (sel.isEmpty()) return
-        Sender.send(applicationContext, d, sel)
+    /** Several devices, one transfer after another, then a "Sent to 2 of 3 devices" summary. */
+    fun sendToMany(devs: List<Device>) {
+        if (devs.isEmpty()) return
+        if (!hasPayload()) { toast("Choose what to send first", 2); return }
+        if (devs.any { it.needsLink }) ensureLinkPermissions { startSending(devs) } else startSending(devs)
+    }
+
+    private fun startSending(devs: List<Device>) {
+        val text = Hub.selectionText?.takeIf { it.isNotEmpty() }
+        val sel = if (text != null) emptyList() else Hub.selection
+        if (sel.isEmpty() && text == null) return
+        Sender.sendMany(applicationContext, devs, sel, text)
+    }
+
+    /** Makes [text] the thing to send (instead of files) and opens "Send to". */
+    fun setSendText(text: String) {
+        if (text.isBlank()) { toast("Nothing to send", 2); return }
+        if (text.length > ProtoV2.MAX_TEXT) { toast("Text is too long (max 100 000 characters)", 2); return }
+        Hub.selection = emptyList()
+        Hub.selectionText = text
+        if (current is SendScreen) current?.refresh() else push(SendScreen(this))
+    }
+
+    fun clipboardText(): String? = try {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = cm.primaryClip
+        if (clip == null || clip.itemCount == 0) null
+        else clip.getItemAt(0).coerceToText(this)?.toString()?.takeIf { it.isNotBlank() }
+    } catch (_: Exception) { null }
+
+    fun sendClipboard() {
+        val t = clipboardText() ?: return toast("Clipboard is empty", 2)
+        setSendText(t)
+    }
+
+    fun openUrl(url: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url.trim())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (_: Exception) { toast("No app can open this link", 2) }
     }
 
     // ---------------------------------------------------------------- permissions
@@ -503,6 +539,7 @@ class MainActivity : Activity(), Hub.Listener {
     // ---------------------------------------------------------------- received files
 
     fun openReceived(r: Received) {
+        r.text?.let { copyText("Text", it); return }
         if (AppInstaller.isApk(r.name)) {
             val group = AppInstaller.groups(Hub.received.toList()).firstOrNull { g -> g.any { it === r } }
             installApp(group ?: listOf(r))
@@ -637,12 +674,17 @@ class MainActivity : Activity(), Hub.Listener {
         setIntent(Intent())  // don't handle it again on the next resume
         uris.removeAll { it.scheme.equals("file", ignoreCase = true) }
         if (uris.isEmpty() && text == null) { toast("Nothing to share", 2); return }
-        val count = if (uris.isEmpty()) 1 else uris.size
+        if (text != null) {
+            // A fastdrop:// join link is not content to send; ask before acting on it. Anything else goes as text.
+            val join = JoinInfo.parse(text)
+            if (join != null) confirmJoinLink(join, codeRole(text)) else setSendText(text)
+            return
+        }
+        val count = uris.size
         toast("Preparing $count item${if (count == 1) "" else "s"}…")
         val app = applicationContext
         thread(name = "prepare") {
-            val items = if (text != null) listOfNotNull(textItem(app, text)) else
-                uris.mapNotNull { try { Storage.itemFromUri(app, it) } catch (_: Exception) { null } }
+            val items = uris.mapNotNull { try { Storage.itemFromUri(app, it) } catch (_: Exception) { null } }
             Hub.main.post {
                 if (isDestroyed) return@post
                 if (items.isEmpty()) {
@@ -654,13 +696,4 @@ class MainActivity : Activity(), Hub.Listener {
             }
         }
     }
-
-    /** Shared text or a link becomes a small .txt file so it travels like any other item. */
-    private fun textItem(app: Context, text: String): SendItem? = try {
-        val dir = File(app.cacheDir, "send").apply { mkdirs() }
-        val f = File(dir, UUID.randomUUID().toString() + "_note.txt")
-        f.writeText(text, Charsets.UTF_8)
-        val link = text.trim().let { (it.startsWith("http://") || it.startsWith("https://")) && !it.contains(' ') && !it.contains('\n') }
-        SendItem(if (link) "link.txt" else "note.txt", f.length(), null, f)
-    } catch (_: Exception) { null }
 }

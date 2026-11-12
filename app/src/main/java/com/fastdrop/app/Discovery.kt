@@ -83,7 +83,7 @@ object Discovery {
         }
         if (!o.optBoolean("receivable", true)) return
         Hub.upsertDevice(Device(id, o.optString("name", "Device"), o.optString("type", "phone"),
-            from.hostAddress ?: return, o.optInt("port", Proto.PORT), SystemClock.elapsedRealtime()))
+            from.hostAddress ?: return, o.optInt("port", Proto.PORT), SystemClock.elapsedRealtime()).withInfo(o))
         if (o.optString("kind") == "announce" && Hub.receivable()) {
             send(packet("reply"), from)  // answer directly so new devices appear instantly
         }
@@ -156,7 +156,7 @@ object Discovery {
                 val o = Io.readJson(DataInputStream(BufferedInputStream(s.getInputStream())))
                 if (o.optString("app") != "fastdrop" || o.optString("id") == Hub.myId) return null
                 Device(o.getString("id"), o.optString("name", ip), o.optString("type", "phone"), ip,
-                    o.optInt("port", port), SystemClock.elapsedRealtime(), manual).also { Hub.upsertDevice(it) }
+                    o.optInt("port", port), SystemClock.elapsedRealtime(), manual).withInfo(o).also { Hub.upsertDevice(it) }
             }
         } catch (_: Exception) { null }
     }

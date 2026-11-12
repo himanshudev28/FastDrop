@@ -512,7 +512,7 @@ object Links {
             val o = Io.readJson(DataInputStream(BufferedInputStream(s.getInputStream())))
             if (o.optString("app") != "fastdrop" || o.optString("id") != expectedId) null
             else Device(expectedId, o.optString("name", ip), o.optString("type", "phone"), ip,
-                o.optInt("port", port), SystemClock.elapsedRealtime(), true)
+                o.optInt("port", port), SystemClock.elapsedRealtime(), true).withInfo(o)
         }
     } catch (_: Exception) { null }
 

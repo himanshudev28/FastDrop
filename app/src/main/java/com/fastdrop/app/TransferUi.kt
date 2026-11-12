@@ -210,22 +210,32 @@ class TransferUi(private val host: MainActivity) {
                 Mode.PENDING -> {
                     if (modeChanged || keyChanged) { ring.indeterminate = true; ring.centerText = null; ring.subText = null; buildActions(newMode, t) }
                     setIf(title, "Connecting to ${pending ?: "device"}…")
-                    setIf(status, Hub.pendingStatus ?: "Waiting for them to accept…")
+                    // First-time senders: the receiver shows the same 4-digit code in its prompt.
+                    val code = Hub.pendingCode
+                    setIf(status, (Hub.pendingStatus ?: "Waiting for them to accept…") + (if (code != null) "\nCode $code" else ""))
                     status.setTextColor(Theme.MUTED)
                     val sel = Hub.selection
-                    setIf(detail, if (sel.isEmpty()) "" else "${sel.size} item${if (sel.size == 1) "" else "s"} · ${Io.bytes(sel.sumOf { it.size })}")
+                    val what = when {
+                        Hub.selectionText != null -> "Text · ${Hub.selectionText?.length ?: 0} characters"
+                        sel.isEmpty() -> ""
+                        else -> "${sel.size} item${if (sel.size == 1) "" else "s"} · ${Io.bytes(sel.sumOf { it.size })}"
+                    }
+                    setIf(detail, listOfNotNull(Hub.multiInfo, what.ifEmpty { null }).joinToString(" · "))
                 }
                 Mode.RUN -> {
                     if (t == null) return
                     if (modeChanged || keyChanged) { ring.indeterminate = false; buildActions(newMode, t) }
-                    val done = t.done.get()
+                    val done = t.done.get()          // includes bytes the receiver already had (resume)
                     val p = if (t.total > 0) (done.toDouble() / t.total).toFloat().coerceIn(0f, 1f) else 0f
                     ring.setProgress(p, true)
                     ring.centerText = "${(p * 100).toInt()}%"
                     val speed = smooth(t, done)
                     val eta = if (speed > 1 && t.total > 0) Io.duration(((t.total - done) / speed).toLong()) else null
                     setIf(title, if (t.outgoing) "Sending to ${t.peer}" else "Receiving from ${t.peer}")
-                    setIf(status, if (speed > 1) Io.speed(speed) + (if (eta != null) " · $eta left" else "") else "Starting…")
+                    // Speed and ETA only count this session's bytes ([smooth] starts from the first reading).
+                    val resumedTag = if (t.resumed) "Resumed · " else ""
+                    setIf(status, if (speed > 1) resumedTag + Io.speed(speed) + (if (eta != null) " · $eta left" else "")
+                        else if (t.resumed) "Resuming at ${(p * 100).toInt()} %" else "Starting…")
                     status.setTextColor(Theme.MUTED)
                     setIf(detail, "${Io.bytes(done)} of ${Io.bytes(t.total)} · ${t.files} file${if (t.files == 1) "" else "s"}")
                     // Decide once, 5 s in, so the hint doesn't flicker.
@@ -252,9 +262,11 @@ class TransferUi(private val host: MainActivity) {
                         buildActions(newMode, t)
                     }
                     val ms = (t.finishedAt - t.startedAt).coerceAtLeast(1)
-                    val avg = t.total * 1000.0 / ms
+                    val moved = (t.total - t.baseline).coerceAtLeast(0)
+                    val avg = moved * 1000.0 / ms
                     setIf(title, if (t.outgoing) "Sent!" else "Received!")
-                    setIf(status, "${if (t.outgoing) "Sent" else "Received"} ${Io.bytes(t.total)} in ${Io.duration(ms / 1000)} · ${Io.speed(avg)}")
+                    setIf(status, if (t.text != null) "Sent text"
+                        else "${if (t.outgoing) "Sent" else "Received"} ${Io.bytes(moved)} in ${Io.duration(ms / 1000)} · ${Io.speed(avg)}")
                     status.setTextColor(Theme.SUCCESS)
                     setIf(detail, (if (t.outgoing) "To " else "From ") + t.peer)
                 }
@@ -379,9 +391,10 @@ class TransferUi(private val host: MainActivity) {
                     val done = Ui.secondaryButton(ctx, "Done") { finishWith(t) }
                     add(done, true)
                     focus = done
-                    if (dev != null && Hub.selection.isNotEmpty()) {
+                    if (dev != null && (Hub.selection.isNotEmpty() || Hub.selectionText != null || t?.text != null)) {
                         val retry = Ui.primaryButton(ctx, "Retry", Theme.SEND, R.drawable.ic_refresh) {
                             finishWith(t)
+                            t?.text?.let { Hub.selectionText = it; Hub.selection = emptyList() }
                             host.sendTo(dev)
                         }
                         add(retry, false)
@@ -424,9 +437,28 @@ class TransferUi(private val host: MainActivity) {
         col.addView(Ui.title(ctx, "${offer.from} wants to send you", 22f).apply { gravity = Gravity.CENTER },
             LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) })
         val n = offer.files.size
-        col.addView(Ui.text(ctx, "$n file${if (n == 1) "" else "s"} · ${Io.bytes(offer.total)}", 15f, Theme.MUTED, Theme.MEDIUM)
-            .apply { gravity = Gravity.CENTER },
-            LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+        val offerText = offer.text
+        if (offerText != null) {
+            col.addView(Ui.text(ctx, "Text · ${offerText.length} character${if (offerText.length == 1) "" else "s"}", 15f, Theme.MUTED, Theme.MEDIUM)
+                .apply { gravity = Gravity.CENTER },
+                LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+            col.addView(Ui.text(ctx, offerText.take(300) + if (offerText.length > 300) "…" else "", 14f, Theme.TEXT).apply {
+                maxLines = 6; ellipsize = TextUtils.TruncateAt.END
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
+        } else {
+            col.addView(Ui.text(ctx, "$n file${if (n == 1) "" else "s"} · ${Io.bytes(offer.total)}", 15f, Theme.MUTED, Theme.MEDIUM)
+                .apply { gravity = Gravity.CENTER },
+                LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+        }
+        // Trusted sender, or the confirmation code the sender is showing.
+        if (offer.trusted) {
+            col.addView(Ui.chip(ctx, "Trusted", Theme.SUCCESS, R.drawable.ic_shield), LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) })
+        } else if (offer.code.isNotEmpty()) {
+            col.addView(Ui.text(ctx, "Code ${offer.code}", 20f, Theme.TEXT, Theme.BOLD).apply { gravity = Gravity.CENTER },
+                LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
+            col.addView(Ui.text(ctx, "Check it matches the code on ${offer.from}", 12f, Theme.FAINT).apply { gravity = Gravity.CENTER },
+                LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(2) })
+        }
 
         // type breakdown (top three kinds)
         var photos = 0; var videos = 0; var music = 0; var apps = 0; var other = 0
@@ -452,9 +484,14 @@ class TransferUi(private val host: MainActivity) {
         }
         if (kinds.isNotEmpty()) col.addView(chipRow, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(12) })
 
+        if (offer.canTrust) {
+            col.addView(Ui.toggleRow(ctx, "Always accept from ${offer.from}", "Skip this prompt next time", false) { offer.alwaysAccept = it },
+                LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        }
+
         val shown = offer.files.take(4).joinToString("\n") { it.name.substringAfterLast('/') }
         val more = if (n > 4) "\nand ${n - 4} more" else ""
-        col.addView(Ui.text(ctx, shown + more, 13f, Theme.FAINT).apply {
+        if (n > 0) col.addView(Ui.text(ctx, shown + more, 13f, Theme.FAINT).apply {
             gravity = Gravity.CENTER; maxLines = 5; ellipsize = TextUtils.TruncateAt.END
         }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
 

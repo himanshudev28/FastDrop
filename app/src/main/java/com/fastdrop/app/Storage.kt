@@ -26,6 +26,8 @@ class Sink(
     private val closer: Closeable,
     private val onFinish: () -> Uri?,
     private val onAbort: () -> Unit,
+    /** Resumable partials only: MediaStore uri (API 29+) or temp file path, saved in the resume record. */
+    val location: String? = null,
 ) {
     @Volatile private var closed = false
 
@@ -35,6 +37,14 @@ class Sink(
         closed = true
         Io.closeQuietly(closer)
         return try { onFinish() } catch (_: Exception) { null }
+    }
+
+    /** Closes the file but leaves the partial on disk (for resume). */
+    @Synchronized
+    fun keep() {
+        if (closed) return
+        closed = true
+        Io.closeQuietly(closer)
     }
 
     @Synchronized
@@ -66,15 +76,65 @@ object Storage {
         return MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
     }
 
-    fun createSink(ctx: Context, rel: String, size: Long): Sink {
+    /**
+     * [partial] = resumable: the file stays invisible (IS_PENDING row, or a hidden temp file below
+     * Android 10) until [Sink.finish], and [Sink.location] says where it lives.
+     */
+    fun createSink(ctx: Context, rel: String, size: Long, partial: Boolean = false): Sink {
         val clean = cleanName(rel)
         val dir = clean.substringBeforeLast('/', "")
         val name = clean.substringAfterLast('/')
-        return if (Build.VERSION.SDK_INT >= 29) mediaStoreSink(ctx, dir, name) else fileSink(ctx, dir, name, size)
+        return if (Build.VERSION.SDK_INT >= 29) mediaStoreSink(ctx, dir, name, partial)
+        else if (partial) filePartialSink(ctx, dir, name, size, null)
+        else fileSink(ctx, dir, name, size)
+    }
+
+    /** Reopens a partial from a resume record without truncating it; null if it is gone. */
+    fun reopenSink(ctx: Context, rec: Resume.Rec): Sink? = try {
+        if (Build.VERSION.SDK_INT >= 29) mediaReopen(ctx, rec)
+        else {
+            val clean = cleanName(rec.name)
+            val f = File(rec.location)
+            if (!f.isFile) null
+            else filePartialSink(ctx, clean.substringBeforeLast('/', ""), clean.substringAfterLast('/'), rec.size, f)
+        }
+    } catch (_: Exception) { null }
+
+    /** Length of the partial file, or -1 if it no longer exists. */
+    fun partialLength(ctx: Context, location: String): Long = try {
+        if (Build.VERSION.SDK_INT >= 29) mediaLength(ctx, location)
+        else File(location).let { if (it.isFile) it.length() else -1L }
+    } catch (_: Exception) { -1L }
+
+    fun deletePartial(ctx: Context, location: String) {
+        try {
+            if (Build.VERSION.SDK_INT >= 29) ctx.contentResolver.delete(Uri.parse(location), null, null)
+            else File(location).delete()
+        } catch (_: Exception) { }
     }
 
     @android.annotation.SuppressLint("NewApi")
-    private fun mediaStoreSink(ctx: Context, dir: String, name: String): Sink {
+    private fun mediaLength(ctx: Context, location: String): Long =
+        ctx.contentResolver.openFileDescriptor(Uri.parse(location), "r")?.use { it.statSize } ?: -1L
+
+    @android.annotation.SuppressLint("NewApi")
+    private fun mediaReopen(ctx: Context, rec: Resume.Rec): Sink? {
+        val cr = ctx.contentResolver
+        val uri = Uri.parse(rec.location)
+        // "rw", never "w": write-only mode may truncate what is already there.
+        val pfd = try { cr.openFileDescriptor(uri, "rw") } catch (_: Exception) { null } ?: return null
+        val out = ParcelFileDescriptor.AutoCloseOutputStream(pfd)
+        return Sink(out.channel, out,
+            onFinish = {
+                cr.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+                uri
+            },
+            onAbort = { cr.delete(uri, null, null) },
+            location = rec.location)
+    }
+
+    @android.annotation.SuppressLint("NewApi")
+    private fun mediaStoreSink(ctx: Context, dir: String, name: String, partial: Boolean): Sink {
         val cr = ctx.contentResolver
         val cv = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
@@ -93,7 +153,39 @@ object Storage {
                 cr.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
                 uri
             },
-            onAbort = { cr.delete(uri, null, null) })
+            onAbort = { cr.delete(uri, null, null) },
+            location = if (partial) uri.toString() else null)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun downloadFolder(dir: String): File {
+        val base = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), FOLDER)
+        return (if (dir.isEmpty()) base else File(base, dir)).also { it.mkdirs() }
+    }
+
+    /** Below Android 10 a resumable file is a hidden temp file in the target folder, renamed when done. */
+    private fun filePartialSink(ctx: Context, dir: String, name: String, size: Long, existing: File?): Sink {
+        val folder = downloadFolder(dir)
+        val temp = existing ?: File(folder, ".$name.${UUID.randomUUID().toString().take(8)}.fdpart")
+        val raf = RandomAccessFile(temp, "rw")
+        if (existing == null) try { raf.setLength(size) } catch (_: Exception) { }
+        return Sink(raf.channel, raf,
+            onFinish = {
+                val stem = name.substringBeforeLast('.'); val ext = name.substringAfterLast('.', "")
+                var f = File(folder, name)
+                var i = 1
+                while (f.exists() || !temp.renameTo(f)) {
+                    if (i > 500) throw IOException("Cannot rename $name")
+                    f = File(folder, if (ext.isEmpty() || ext == name) "$name ($i)" else "$stem ($i).$ext"); i++
+                }
+                val r = Uri.fromFile(f)
+                MediaScannerConnection.scanFile(ctx, arrayOf(f.absolutePath), null) { _, u ->
+                    if (u != null) Hub.received.firstOrNull { it.uri == r }?.uri = u
+                }
+                r
+            },
+            onAbort = { temp.delete() },
+            location = temp.absolutePath)
     }
 
     @Suppress("DEPRECATION")
@@ -131,6 +223,22 @@ object Storage {
         val pfd = ctx.contentResolver.openFileDescriptor(item.uri!!, "r") ?: throw IOException("Cannot open ${item.name}")
         val inp = ParcelFileDescriptor.AutoCloseInputStream(pfd)
         return Source(inp.channel, inp)
+    }
+
+    /** Source file's last-modified time in ms (resume keys only); 0 when unknown. */
+    fun lastModified(ctx: Context, item: SendItem): Long {
+        item.file?.let { return it.lastModified() }
+        val u = item.uri ?: return 0L
+        if (u.scheme.equals("file", true)) return File(u.path ?: return 0L).lastModified()
+        val cols = listOf(DocumentsContract.Document.COLUMN_LAST_MODIFIED to 1L, MediaStore.MediaColumns.DATE_MODIFIED to 1000L)
+        for ((col, mul) in cols) {
+            try {
+                ctx.contentResolver.query(u, arrayOf(col), null, null, null)?.use { c ->
+                    if (c.moveToFirst() && !c.isNull(0)) { val v = c.getLong(0); if (v > 0) return v * mul }
+                }
+            } catch (_: Exception) { }
+        }
+        return 0L
     }
 
     /** file:// from other apps: never our own private storage; only the shared external storage tree. */

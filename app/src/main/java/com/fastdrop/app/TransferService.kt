@@ -37,7 +37,7 @@ class TransferService : Service() {
         /** Stop once the app is closed and nothing is transferring, hosting, joined or web-sharing. */
         fun stopIfIdle() {
             val s = instance ?: return
-            val busy = Hub.listener != null || Hub.autoAccept || Hub.transfer?.running == true ||
+            val busy = Hub.listener != null || Hub.autoActive || Hub.transfer?.running == true ||
                 Hub.pendingSendTo != null ||
                 Links.hostState != Links.HostState.OFF || Links.joinedName != null ||
                 WebShare.running
@@ -85,8 +85,8 @@ class TransferService : Service() {
                 channels(ctx)
                 val n = builder(ctx, CH_OFFER)
                     .setSmallIcon(R.drawable.ic_stat)
-                    .setContentTitle("${offer.from} wants to send you files")
-                    .setContentText("${offer.files.size} file(s) • ${Io.bytes(offer.total)}")
+                    .setContentTitle(if (offer.text != null) "${offer.from} wants to send you text" else "${offer.from} wants to send you files")
+                    .setContentText(offer.text?.take(80) ?: "${offer.files.size} file(s) • ${Io.bytes(offer.total)}")
                     .setAutoCancel(true)
                     .setCategory(Notification.CATEGORY_MESSAGE)
                     .setContentIntent(openApp(ctx))
