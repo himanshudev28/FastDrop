@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- QR code view -->
+    <string name="qr_cd">QR code</string>
+
+    <!-- QR scan -->
+    <string name="scan_title">Scan a code</string>
+    <string name="scan_hint">Point at the code on the other device.</string>
+    <string name="cd_scan_close">Close scanner</string>
+    <string name="scan_torch">Torch</string>
+    <string name="scan_photo">From photo</string>
+    <string name="scan_enter_code">Enter code</string>
+    <string name="scan_entry_title">Enter a code</string>
+    <string name="scan_entry_hint">fastdrop://join…</string>
+    <string name="scan_paste">Paste</string>
+    <string name="scan_use_code">Use code</string>
+    <string name="scan_not_fastdrop">That\'s not a FastDrop code</string>
+    <string name="scan_found">Found %1$s</string>
+    <string name="scan_no_camera">No camera found</string>
+    <string name="scan_no_camera_meta">You can still scan a screenshot or photo of the code.</string>
+    <string name="scan_camera_busy">Camera isn\'t available</string>
+    <string name="scan_camera_busy_meta">Another app may be using it. Try again, or scan from a photo.</string>
+    <string name="scan_allow_title">Allow camera to scan</string>
+    <string name="scan_allow_meta">FastDrop only uses the camera to read the QR code. Nothing is recorded.</string>
+    <string name="scan_settings_meta">Turn on Camera for FastDrop in Settings, or scan from a photo instead.</string>
+    <string name="scan_allow_camera">Allow camera</string>
+    <string name="scan_open_settings">Open settings</string>
+    <string name="scan_no_picker">No photo picker on this device</string>
+    <string name="scan_reading_photo">Reading photo…</string>
+    <string name="scan_photo_none">No QR code found in that photo</string>
+
+    <!-- Receive -->
+    <string name="rcv_title">Receive</string>
+    <string name="rcv_scan">Scan sender\'s QR</string>
+    <string name="rcv_visible">Visible as %1$s</string>
+    <string name="rcv_starting_p2p">Setting up Wi‑Fi Direct…</string>
+    <string name="rcv_starting_hotspot">Setting up hotspot…</string>
+    <string name="rcv_starting_meta">Same Wi‑Fi works already.</string>
+    <string name="rcv_failed">Couldn\'t start Wi‑Fi Direct</string>
+    <string name="rcv_failed_meta">Same Wi‑Fi still works.</string>
+    <string name="rcv_state_p2p">Wi‑Fi Direct · ready</string>
+    <string name="rcv_state_hotspot">Hotspot · ready</string>
+    <string name="rcv_state_wifi">Visible on this Wi‑Fi</string>
+    <string name="rcv_tag_p2p">Wi‑Fi Direct</string>
+    <string name="rcv_tag_hotspot">Hotspot</string>
+    <string name="rcv_tag_wifi">Wi‑Fi</string>
+    <string name="rcv_perm_title">Allow Nearby devices</string>
+    <string name="rcv_perm_meta">Needed to link phones without a router.</string>
+    <string name="rcv_precise_title">Choose Precise location</string>
+    <string name="rcv_precise_meta">Wi‑Fi Direct needs Precise location. Tap to open settings.</string>
+    <string name="rcv_open_android_settings">Open Android Settings and allow it for FastDrop</string>
+    <string name="rcv_seg_app">FastDrop app</string>
+    <string name="rcv_seg_other">Other devices</string>
+    <string name="rcv_caption_app">On the other phone, tap Send, then Scan a code. No router needed.</string>
+    <string name="rcv_caption_app_lan">On the other phone, tap Send, then Scan a code. Works on the same Wi‑Fi.</string>
+    <string name="rcv_caption_other">Scan with any camera to join the Wi‑Fi, then open the page from Share with any device.</string>
+    <string name="rcv_caption_other_none">No separate network right now. An iPhone or PC on the same Wi‑Fi can use Share with any device.</string>
+    <string name="rcv_share_any">Share with any device</string>
+    <string name="rcv_share_any_sub">Opens in their browser. No app needed.</string>
+    <string name="rcv_details">Network details</string>
+    <string name="rcv_network">Network</string>
+    <string name="rcv_password">Password</string>
+    <string name="rcv_address">Address</string>
+    <string name="cd_copy_network">Copy network name</string>
+    <string name="cd_copy_password">Copy password</string>
+    <string name="cd_copy_address">Copy address</string>
+    <string name="cd_show_password">Show password</string>
+    <string name="cd_hide_password">Hide password</string>
+    <string name="rcv_accept_section">Receiving</string>
+    <string name="rcv_accept_title">Accept files from</string>
+    <string name="rcv_accept_ask">Ask every time</string>
+    <string name="rcv_accept_trusted">Trusted devices</string>
+    <string name="rcv_accept_everyone">Everyone</string>
+    <string name="rcv_same_wifi">On the same Wi‑Fi? Nearby phones already see you.</string>
+    <string name="rcv_step1">On your phone, open FastDrop and tap Receive.</string>
+    <string name="rcv_step2">Tap Scan sender\'s QR.</string>
+    <string name="rcv_step3">Point it at this screen.</string>
+
+    <!-- Share with any device -->
+    <string name="web_title">Share with any device</string>
+    <string name="web_stop">Stop</string>
+    <string name="web_stop_sharing">Stop sharing</string>
+    <string name="web_starting">Starting…</string>
+    <string name="web_starting_meta">Opening the web page on this device.</string>
+    <string name="web_failed">Couldn\'t start sharing</string>
+    <string name="web_failed_meta">Port %1$d is busy. Close other sharing apps and try again.</string>
+    <string name="web_try_again">Try again</string>
+    <string name="web_what_app">Sharing the FastDrop app</string>
+    <string name="web_what_none">Nothing selected</string>
+    <string name="web_what_files">Sharing %1$d files</string>
+    <string name="web_what_files_app">Sharing %1$d files + FastDrop app</string>
+    <string name="web_meta">No app needed. Stays offline.</string>
+    <string name="web_meta_upload_only">Others can still send files to this device from their browser.</string>
+    <string name="web_step1">Join this Wi‑Fi</string>
+    <string name="web_step1_meta">Scan with the other device\'s camera. Skip if it is already on your Wi‑Fi.</string>
+    <string name="web_step2">Open in the browser</string>
+    <string name="web_step2_meta">Scan this, or type the address.</string>
+    <string name="web_network">Network</string>
+    <string name="web_password">Password</string>
+    <string name="web_link">Link</string>
+    <string name="web_copy_link">Copy link</string>
+    <string name="web_no_address">Connect to Wi‑Fi to get an address</string>
+    <string name="web_also">Also: %1$s</string>
+    <string name="web_live">Live</string>
+    <string name="web_downloads">Downloads</string>
+    <string name="web_uploads">Uploads</string>
+    <string name="web_sent">Sent</string>
+    <string name="web_received">Received</string>
+    <string name="web_waiting">Waiting for someone to connect…</string>
+    <string name="web_just_now">just now</string>
+    <string name="web_s_ago">%1$d s ago</string>
+    <string name="web_min_ago">%1$d min ago</string>
+    <string name="web_h_ago">%1$d h ago</string>
+
+    <!-- Storage browser -->
+    <string name="brw_title">Browse storage</string>
+    <string name="brw_storage">Storage</string>
+    <string name="brw_select_folder">Select this folder</string>
+    <string name="brw_folder_selected">Folder selected</string>
+    <string name="brw_clear">Clear</string>
+    <string name="brw_hint">Tap a file to select it. Use the + on a folder, or Select this folder, to pick the whole folder.</string>
+    <string name="brw_add">Add</string>
+    <string name="brw_none">Nothing selected</string>
+    <plurals name="brw_selected">
+        <item quantity="one">%d item selected</item>
+        <item quantity="other">%d items selected</item>
+    </plurals>
+    <string name="brw_loading">Loading…</string>
+    <string name="brw_unreadable">Can\'t read this folder. Allow storage access in Settings, then Apps, then FastDrop, then Permissions.</string>
+    <string name="brw_no_storage">No storage found.</string>
+    <string name="brw_empty">This folder is empty.</string>
+    <string name="brw_folder">Folder</string>
+    <string name="brw_internal">Internal storage</string>
+    <string name="brw_usb">USB / SD card (%1$s)</string>
+    <string name="brw_cd_selected">Selected</string>
+    <string name="brw_cd_select_folder">Select folder %1$s</string>
+</resources>
