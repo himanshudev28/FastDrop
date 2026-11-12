@@ -107,6 +107,15 @@ jobs:
 
       # Universal (arm64 + x86_64). Ad-hoc signed unless a "FastDrop Dev" identity exists (it won't on a runner).
       # Not notarized.
+      - name: Check Mac version matches the Android versionName
+        run: |
+          APP=$(sed -nE 's/.*versionName *= *"([^"]+)".*/\1/p' app/build.gradle.kts)
+          MAC=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" mac/Resources/Info.plist)
+          if [ "$APP" != "$MAC" ]; then
+            echo "::error::mac/Resources/Info.plist version $MAC does not match versionName $APP"
+            exit 1
+          fi
+
       - name: Build FastDrop.app
         working-directory: mac
         run: scripts/build-app.sh
