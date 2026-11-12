@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Choose devices (SendScreen) -->
+    <string name="send_title">Send to</string>
+    <string name="send_select">Select</string>
+    <string name="send_choose_several">Choose devices</string>
+    <string name="send_n_selected">%1$d selected</string>
+    <string name="send_clear">Clear</string>
+    <plurals name="send_to_n">
+        <item quantity="one">Send to %1$d device</item>
+        <item quantity="other">Send to %1$d devices</item>
+    </plurals>
+    <string name="send_edit">Edit</string>
+    <string name="send_choose">Choose</string>
+    <string name="send_nothing">Nothing selected</string>
+    <string name="send_nothing_meta">Choose what to send first.</string>
+    <plurals name="send_text_chars">
+        <item quantity="one">Text · %1$d character</item>
+        <item quantity="other">Text · %1$d characters</item>
+    </plurals>
+    <string name="send_section_lan">On this Wi‑Fi</string>
+    <string name="send_section_p2p">Nearby · Wi‑Fi Direct</string>
+    <string name="send_section_qr">From a QR code</string>
+    <string name="send_section_text">Send text</string>
+    <string name="send_section_cant">Can\'t see it?</string>
+    <string name="send_press_keys">Press 1–9 to send to a device</string>
+    <string name="send_direct_meta">Connects directly when you send</string>
+    <string name="send_qr_joins">Joins its Wi‑Fi when you send</string>
+    <string name="send_needs_new">Needs FastDrop 2.1 or newer to receive text</string>
+    <string name="send_text">Send text</string>
+    <string name="send_text_meta">Type a message or paste a link</string>
+    <string name="send_text_hint">Message or link</string>
+    <string name="send_next">Next</string>
+    <string name="send_clipboard">Send clipboard</string>
+    <string name="send_clipboard_meta">Send what you last copied</string>
+    <string name="send_scan">Scan a code</string>
+    <string name="send_show_qr">Show my QR</string>
+    <string name="send_show_qr_meta">Let another device scan this one</string>
+    <string name="send_qr_hint">On the other device tap Receive, then Scan sender\'s QR. Or point its camera here.</string>
+    <string name="send_search">Search this Wi‑Fi</string>
+    <string name="send_search_meta">Look for FastDrop on this network</string>
+    <string name="send_searching">Searching this Wi‑Fi…</string>
+    <string name="send_found_none">No devices found</string>
+    <plurals name="send_found_n">
+        <item quantity="one">Found %1$d device</item>
+        <item quantity="other">Found %1$d devices</item>
+    </plurals>
+    <string name="send_enter_ip">Enter IP address</string>
+    <string name="send_enter_ip_meta">Type the other device\'s address</string>
+    <string name="send_ip_hint">e.g. 192.168.1.23</string>
+    <string name="send_connect">Connect</string>
+    <string name="send_looking_at">Looking for %1$s…</string>
+    <string name="send_found_one">Found %1$s</string>
+    <string name="send_no_fastdrop">No FastDrop found at %1$s</string>
+    <string name="send_share_any">Share with any device</string>
+    <string name="send_share_any_meta">Opens in their browser. No app needed.</string>
+    <string name="send_looking">Looking on this Wi‑Fi…</string>
+    <string name="send_looking_meta">Open FastDrop on the other device.</string>
+    <string name="send_none_meta">Check both devices are on the same Wi‑Fi.</string>
+    <string name="send_no_network">No Wi‑Fi network</string>
+    <string name="send_no_network_meta">Join a Wi‑Fi or hotspot, or use Show my QR.</string>
+    <string name="send_loc_off">Location is off</string>
+    <string name="send_loc_off_meta">Turn it on to find Wi‑Fi Direct phones nearby.</string>
+    <string name="send_perm">Find phones without Wi‑Fi</string>
+    <string name="send_perm_meta">Allow Nearby devices so Wi‑Fi Direct can work.</string>
+    <string name="send_precise">Choose Precise location</string>
+    <string name="send_precise_meta">Wi‑Fi Direct needs Precise location. Tap to open settings.</string>
+    <string name="send_open_settings_manual">Open Android Settings and allow it for FastDrop</string>
+
+    <!-- Picker (PickerActivity) -->
+    <string name="pick_title">Choose what to send</string>
+    <string name="pick_select_all">Select all</string>
+    <string name="pick_clear_all">Clear all</string>
+    <string name="pick_send">Send</string>
+    <string name="pick_preparing">Preparing…</string>
+    <string name="pick_n_selected">%1$d selected</string>
+    <string name="pick_tab_apps">Apps</string>
+    <string name="pick_tab_photos">Photos</string>
+    <string name="pick_tab_videos">Videos</string>
+    <string name="pick_tab_music">Music</string>
+    <string name="pick_tab_files">Files</string>
+    <string name="pick_tab_text">Text</string>
+    <string name="pick_split">Split</string>
+    <string name="pick_loading_meta">This only takes a moment.</string>
+    <string name="pick_loading_apps">Reading your apps…</string>
+    <string name="pick_loading_photos">Looking for your photos…</string>
+    <string name="pick_loading_videos">Looking for your videos…</string>
+    <string name="pick_loading_music">Looking for your music…</string>
+    <string name="pick_empty_apps">No apps found</string>
+    <string name="pick_empty_apps_meta">Turn on system apps above to see more.</string>
+    <string name="pick_empty_photos">No photos yet</string>
+    <string name="pick_empty_photos_meta">Photos on this device will show up here.</string>
+    <string name="pick_empty_videos">No videos yet</string>
+    <string name="pick_empty_videos_meta">Videos on this device will show up here.</string>
+    <string name="pick_empty_music">No music yet</string>
+    <string name="pick_empty_music_meta">Songs on this device will show up here.</string>
+    <string name="pick_perm_photos">Allow access to your photos</string>
+    <string name="pick_perm_photos_why">FastDrop only reads photos to show them here. Nothing leaves your device except what you send.</string>
+    <string name="pick_perm_videos">Allow access to your videos</string>
+    <string name="pick_perm_videos_why">FastDrop only reads videos to show them here. Nothing leaves your device except what you send.</string>
+    <string name="pick_perm_music">Allow access to your music</string>
+    <string name="pick_perm_music_why">FastDrop only reads music to show it here. Nothing leaves your device except what you send.</string>
+    <string name="pick_allow_access">Allow access</string>
+    <string name="pick_open_settings">Open settings</string>
+    <string name="pick_open_settings_manual">Open Settings, then Apps, then FastDrop, then Permissions</string>
+    <string name="pick_partial_photos">Showing only the photos you chose</string>
+    <string name="pick_partial_photos_meta">Allow all photos</string>
+    <string name="pick_partial_videos">Showing only the videos you chose</string>
+    <string name="pick_partial_videos_meta">Allow all videos</string>
+    <string name="pick_system_apps">Show system apps</string>
+    <string name="pick_system_apps_meta">Include apps that came with the device</string>
+    <string name="pick_files">Pick files</string>
+    <string name="pick_files_meta">Documents, archives, anything</string>
+    <string name="pick_folder">Pick a folder</string>
+    <string name="pick_folder_meta">Send a whole folder with its files</string>
+    <string name="pick_browse">Browse storage</string>
+    <string name="pick_browse_meta">USB drives, SD cards and system folders</string>
+    <string name="pick_picked_files">Picked files</string>
+    <string name="pick_reading_files">Reading files…</string>
+    <string name="pick_nothing_picked">Nothing yet. Files you add here stay selected while you switch tabs.</string>
+    <plurals name="pick_files_size">
+        <item quantity="one">%1$d file · %2$s</item>
+        <item quantity="other">%1$d files · %2$s</item>
+    </plurals>
+    <string name="pick_allfiles_title">Browse all files</string>
+    <string name="pick_allfiles_msg">Allow \"All files access\" to browse every folder, including USB drives and SD cards. Or choose media only to keep it limited.</string>
+    <string name="pick_allfiles_allow">Allow all files</string>
+    <string name="pick_allfiles_media">Media only</string>
+    <string name="pick_no_files">No files found</string>
+    <plurals name="pick_added">
+        <item quantity="one">Added %1$d file</item>
+        <item quantity="other">Added %1$d files</item>
+    </plurals>
+    <string name="pick_cant_read">Couldn\'t read the selected items</string>
+
+    <!-- Picker: Text tab -->
+    <string name="pick_text_title">Send text or a link</string>
+    <string name="pick_text_hint">Text is sent on its own, not with files.</string>
+    <string name="pick_text_field_hint">Type a message or paste a link</string>
+    <string name="pick_text_counter">%1$d / %2$d</string>
+    <string name="pick_paste">Paste</string>
+    <string name="pick_clip_empty">Clipboard is empty</string>
+    <string name="pick_text_bar">Text</string>
+    <plurals name="pick_text_chars">
+        <item quantity="one">%1$d character</item>
+        <item quantity="other">%1$d characters</item>
+    </plurals>
+    <string name="pick_text_too_long">Text is too long (max 100 000 characters)</string>
+    <string name="pick_clear_title">Clear your selected files?</string>
+    <plurals name="pick_clear_msg">
+        <item quantity="one">Text is sent on its own. Clear %1$d selected file?</item>
+        <item quantity="other">Text is sent on its own. Clear %1$d selected files?</item>
+    </plurals>
+    <string name="pick_keep_files">Keep files</string>
+    <string name="pick_clear">Clear</string>
+</resources>

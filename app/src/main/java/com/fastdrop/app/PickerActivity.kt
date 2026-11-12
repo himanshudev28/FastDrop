@@ -1,215 +1,33 @@
 package com.fastdrop.app
 
 import android.app.Activity
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
-import android.graphics.PorterDuff
-import android.graphics.drawable.ColorDrawable
-import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
-import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
-import android.view.ViewGroup
-import android.view.ViewOutlineProvider
-import android.widget.AbsListView
-import android.widget.BaseAdapter
 import android.widget.FrameLayout
 import android.widget.GridView
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.ScrollView
 import android.widget.TextView
-import android.window.OnBackInvokedCallback
-import android.window.OnBackInvokedDispatcher
 import java.io.File
-import java.util.Locale
 import kotlin.concurrent.thread
 
-/** Small shared helpers for the two picker screens (PickerActivity and BrowserActivity). */
-internal object PickUi {
-
-    /** Transparent system bars, content drawn under them; screens pad with Ui.applyInsets. */
-    @Suppress("DEPRECATION")
-    fun edgeToEdge(a: Activity) {
-        val w = a.window
-        w.setBackgroundDrawable(ColorDrawable(Theme.BG))
-        w.statusBarColor = Color.TRANSPARENT
-        w.navigationBarColor = Color.TRANSPARENT
-        if (Build.VERSION.SDK_INT >= 29) {
-            w.isNavigationBarContrastEnforced = false
-            w.isStatusBarContrastEnforced = false
-        }
-        if (Build.VERSION.SDK_INT >= 30) {
-            w.setDecorFitsSystemWindows(false)
-        } else {
-            w.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-        }
-    }
-
-    /** Back that works with the predictive-back callback (33+) and the old callback below. */
-    fun registerBack(a: Activity, onBack: () -> Unit) {
-        if (Build.VERSION.SDK_INT >= 33) {
-            a.onBackInvokedDispatcher.registerOnBackInvokedCallback(
-                OnBackInvokedDispatcher.PRIORITY_DEFAULT, OnBackInvokedCallback { onBack() })
-        }
-    }
-
-    /** Focus / selector highlight for list and grid rows (white ring). */
-    fun selector(ctx: Context, radiusDp: Int): GradientDrawable = GradientDrawable().apply {
-        setColor(0x14FFFFFF)
-        cornerRadius = Theme.dp(ctx, radiusDp).toFloat()
-        setStroke(Theme.dp(ctx, 2), 0xE6FFFFFF.toInt())
-    }
-
-    fun rounded(ctx: Context, color: Int, radiusDp: Int, stroke: Int = 0, strokeDp: Int = 1): GradientDrawable =
-        GradientDrawable().apply {
-            setColor(color)
-            cornerRadius = Theme.dp(ctx, radiusDp).toFloat()
-            if (stroke != 0) setStroke(Theme.dp(ctx, strokeDp), stroke)
-        }
-
-    fun roundOutline(radiusPx: Float): ViewOutlineProvider = object : ViewOutlineProvider() {
-        override fun getOutline(view: View, outline: android.graphics.Outline) {
-            outline.setRoundRect(0, 0, view.width, view.height, radiusPx)
-        }
-    }
-
-    fun fmtDuration(ms: Long): String {
-        val s = (ms / 1000).coerceAtLeast(0)
-        val h = s / 3600
-        val m = (s % 3600) / 60
-        val sec = s % 60
-        return if (h > 0) String.format(Locale.US, "%d:%02d:%02d", h, m, sec)
-        else String.format(Locale.US, "%d:%02d", m, sec)
-    }
-
-    /** Round selection mark. Pops in with a spring when switched on. */
-    class Check(ctx: Context, sizeDp: Int, private val onPhoto: Boolean) : FrameLayout(ctx) {
-        private val mark = ImageView(ctx)
-        private var on: Boolean? = null
-
-        init {
-            val s = Theme.dp(ctx, sizeDp)
-            mark.setImageResource(R.drawable.ic_check)
-            mark.setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN)
-            mark.scaleType = ImageView.ScaleType.FIT_CENTER
-            val p = s / 5
-            mark.setPadding(p, p, p, p)
-            importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-            addView(mark, LayoutParams(s, s, Gravity.CENTER))
-            set(false, false)
-        }
-
-        fun set(v: Boolean, animate: Boolean) {
-            if (on == v) return
-            on = v
-            val ctx = context
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                if (v) {
-                    setColor(Theme.ACCENT)
-                    setStroke(Theme.dp(ctx, 2), Color.WHITE)
-                } else {
-                    setColor(if (onPhoto) 0x59000000 else 0x00000000)
-                    setStroke(Theme.dp(ctx, 2), if (onPhoto) 0xCCFFFFFF.toInt() else Theme.STROKE_STRONG)
-                }
-            }
-            mark.animate().cancel()
-            if (!v) {
-                mark.alpha = 0f; mark.scaleX = 0.3f; mark.scaleY = 0.3f
-            } else if (animate && Anim.on(ctx)) {
-                mark.alpha = 0f; mark.scaleX = 0.3f; mark.scaleY = 0.3f
-                mark.animate().alpha(1f).scaleX(1f).scaleY(1f)
-                    .setDuration(Theme.D_TAP).setInterpolator(Theme.EASE_ENTER).start()
-            } else {
-                mark.alpha = 1f; mark.scaleX = 1f; mark.scaleY = 1f
-            }
-        }
-    }
-
-    /** Floating bottom bar: "12 selected / 340 MB" plus a gradient action button. Slides in and out. */
-    class FloatingBar(ctx: Context, private val label: String, onNext: () -> Unit) : FrameLayout(ctx) {
-        private val countText = Ui.text(ctx, "", 16f, Theme.TEXT, Theme.BOLD)
-        private val subText = Ui.text(ctx, "", 12.5f, Theme.MUTED, Theme.MEDIUM)
-        val button: TextView = Ui.jobButton(ctx, label, Job.SEND, null, onNext)
-        private var shown = false
-
-        init {
-            visibility = GONE
-            clipChildren = false
-            clipToPadding = false
-            val g = Theme.dp(ctx, if (Ui.tv(ctx)) Theme.TV_GUTTER else Theme.GUTTER)
-            setPadding(g, Theme.dp(ctx, 8), g, Theme.dp(ctx, 12))
-            val bar = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(Theme.dp(ctx, 20), Theme.dp(ctx, 10), Theme.dp(ctx, 10), Theme.dp(ctx, 10))
-                background = rounded(ctx, Theme.alpha(Theme.SURFACE_2, 0.97f), 30, Theme.STROKE_STRONG)
-            }
-            val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-            col.addView(countText)
-            col.addView(subText, LinearLayout.LayoutParams(-2, -2).apply { topMargin = Theme.dp(ctx, 3) })
-            bar.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
-            button.minHeight = Theme.dp(ctx, 48)
-            bar.addView(button, LinearLayout.LayoutParams(-2, -2))
-            addView(bar, LayoutParams(-1, -2))
-            Ui.applyInsets(this, top = false, bottom = true)
-        }
-
-        fun update(count: Int, sub: String, noun: String = "selected", anim: Boolean = true) {
-            if (count > 0) {
-                countText.text = "$count $noun"
-                subText.text = sub
-                subText.visibility = if (sub.isEmpty()) GONE else VISIBLE
-                show(anim)
-            } else hide(anim)
-        }
-
-        fun setBusy(busy: Boolean) {
-            button.isEnabled = !busy
-            button.text = if (busy) "Preparing…" else label
-            button.alpha = if (busy) 0.6f else 1f
-        }
-
-        private fun show(anim: Boolean) {
-            if (shown) return
-            shown = true
-            animate().cancel()
-            visibility = VISIBLE
-            if (anim && Anim.on(context)) {
-                translationY = Theme.dp(context, 120).toFloat()
-                alpha = 0f
-                animate().translationY(0f).alpha(1f).setStartDelay(0)
-                    .setDuration(Theme.DUR_SLOW).setInterpolator(Theme.EASE_OUT).start()
-            } else {
-                translationY = 0f; alpha = 1f
-            }
-        }
-
-        private fun hide(anim: Boolean) {
-            if (!shown) return
-            shown = false
-            animate().cancel()
-            if (anim && Anim.on(context)) {
-                animate().translationY(Theme.dp(context, 120).toFloat()).alpha(0f).setStartDelay(0)
-                    .setDuration(Theme.DUR).setInterpolator(Theme.EASE_IN)
-                    .withEndAction { if (!shown) visibility = GONE }.start()
-            } else visibility = GONE
-        }
-    }
-}
-
 /**
- * Chooses what to send: Apps, Photos, Videos, Music and Files tabs. The selection survives tab
- * changes. "Next" stores it in Hub.selection and finishes with RESULT_OK.
+ * Chooses what to send (docs 4.2): Apps, Photos, Videos, Music, Files and Text tabs, each in its
+ * category colour. The selection survives tab changes. "Send" stores it in Hub.selection (or
+ * Hub.selectionText for the Text tab) and finishes with RESULT_OK.
+ *
+ * Split across files: [PickUi] (shared helpers, check mark, selection bar), [PickerTabBar],
+ * [PickerViews] (cells, rows, pane states, adapters) and [PickerTextPane].
  */
 class PickerActivity : Activity() {
 
@@ -219,6 +37,7 @@ class PickerActivity : Activity() {
         const val TAB_VIDEOS = "videos"
         const val TAB_MUSIC = "music"
         const val TAB_FILES = "files"
+        const val TAB_TEXT = "text"
         const val EXTRA_TAB = "tab"
 
         private const val REQ_FILES = 1
@@ -243,12 +62,18 @@ class PickerActivity : Activity() {
     private val KIND_MEDIA = 1
     private val KIND_FILE = 2
 
-    private class TabDef(val id: String, val label: String)
-
-    private val defs = listOf(
-        TabDef(TAB_APPS, "Apps"), TabDef(TAB_PHOTOS, "Photos"), TabDef(TAB_VIDEOS, "Videos"),
-        TabDef(TAB_MUSIC, "Music"), TabDef(TAB_FILES, "Files"),
-    )
+    /** Text is phone-only: typing with a D-pad is painful (docs 3.3). */
+    private val defs: List<PickTab> by lazy {
+        val l = arrayListOf(
+            PickTab(TAB_APPS, getString(R.string.pick_tab_apps), Job.OK),
+            PickTab(TAB_PHOTOS, getString(R.string.pick_tab_photos), Job.WEB),
+            PickTab(TAB_VIDEOS, getString(R.string.pick_tab_videos), Job.RECEIVE),
+            PickTab(TAB_MUSIC, getString(R.string.pick_tab_music), Job.TEXT),
+            PickTab(TAB_FILES, getString(R.string.pick_tab_files), null),
+        )
+        if (!Ui.tv(this)) l.add(PickTab(TAB_TEXT, getString(R.string.pick_tab_text), Job.TEXT))
+        l
+    }
 
     private val picks = LinkedHashMap<String, Pick>()
     private val mediaItems = HashMap<MediaKind, List<MediaItem>>()
@@ -263,12 +88,14 @@ class PickerActivity : Activity() {
 
     private lateinit var root: FrameLayout
     private lateinit var content: FrameLayout
-    private lateinit var tabBar: TabBar
+    private lateinit var tabBar: PickerTabBar
     private lateinit var selectAllBtn: TextView
     private lateinit var bar: PickUi.FloatingBar
     private lateinit var bannerHolder: FrameLayout
-    private val paneViews = arrayOfNulls<View>(5)
-    private val panes = HashMap<String, Pane>()
+    private lateinit var paneViews: Array<View?>
+    private val panes = HashMap<String, PickPane>()
+    private var textPane: PickerTextPane? = null
+    private var typed = ""
     private var cur = -1
     private var bottomInset = 0
     private var filesList: LinearLayout? = null
@@ -276,9 +103,11 @@ class PickerActivity : Activity() {
     private var filesBusy = 0
     private var pendingAllFiles = false
     private var finishing = false
+    private var confirm: Sheets.Handle? = null
 
-    private val gut get() = Theme.dp(this, if (Ui.tv(this)) Theme.TV_GUTTER else Theme.GUTTER)
     private fun dp(v: Int) = Theme.dp(this, v)
+    private val inset: () -> Int = { bottomInset }
+    private val side get() = if (Ui.tv(this)) dp(16) else Ui.gutter(this)
 
     // ---------- lifecycle ----------
 
@@ -288,10 +117,13 @@ class PickerActivity : Activity() {
         PickUi.edgeToEdge(this)
         PickUi.registerBack(this) { cancel() }
         loadExisting()
+        typed = Hub.selectionText.orEmpty()
+        paneViews = arrayOfNulls(defs.size)
         setContentView(buildUi())
         Theme.applyWindow(this)
-        val start = defs.indexOfFirst { it.id == intent?.getStringExtra(EXTRA_TAB) }.let { if (it < 0) 1 else it }
-        selectTab(start, false)
+        val want = intent?.getStringExtra(EXTRA_TAB) ?: if (typed.isNotEmpty()) TAB_TEXT else TAB_PHOTOS
+        val start = defs.indexOfFirst { it.id == want }.let { if (it < 0) 1 else it }
+        selectTab(start, false, force = true)
         updateBar(false)
         tabBar.post { tabBar.focusTab(cur) }
     }
@@ -323,6 +155,7 @@ class PickerActivity : Activity() {
     }
 
     private fun cancel() {
+        if (confirm?.showing == true) { confirm?.dismiss(); return }
         setResult(RESULT_CANCELED)
         finish()
     }
@@ -357,140 +190,102 @@ class PickerActivity : Activity() {
 
     // ---------- UI ----------
 
-    private lateinit var headerView: View
-
     private fun buildUi(): View {
+        val tv = Ui.tv(this)
         root = FrameLayout(this).apply {
             setBackgroundColor(Theme.BG)
             setOnApplyWindowInsetsListener { _, ins ->
-                val b = Ui.insetsOf(ins)[3]
+                val b = Ui.insetsOf(ins, ime = true)[3]
                 if (b != bottomInset) {
                     bottomInset = b
                     for (p in panes.values) p.applyPadding()
+                    textPane?.applyPadding()
                 }
                 ins
             }
         }
 
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        Ui.applyInsets(column, top = true, bottom = false)
+        Ui.applyInsets(column, top = true, bottom = false, extraDp = if (tv) Theme.TV_SAFE_V else 0)
 
-        selectAllBtn = Ui.secondaryButton(this, "Select all") { selectAll() }.apply {
-            minHeight = dp(40)
-            setPadding(dp(16), dp(8), dp(16), dp(8))
-            textSize = 14f
-        }
-        headerView = Ui.header(this, "Choose", { cancel() }, selectAllBtn)
-        column.addView(headerView, LinearLayout.LayoutParams(-1, -2).apply { leftMargin = gut; rightMargin = gut })
+        selectAllBtn = Ui.quietButton(this, getString(R.string.pick_select_all)) { selectAll() }
+        column.addView(Ui.header(this, getString(R.string.pick_title), { cancel() }, selectAllBtn),
+            LinearLayout.LayoutParams(-1, -2))
 
-        tabBar = TabBar()
-        column.addView(tabBar, LinearLayout.LayoutParams(-1, -2).apply {
-            leftMargin = gut; rightMargin = gut; topMargin = dp(4); bottomMargin = dp(10)
-        })
-
+        tabBar = PickerTabBar(this, defs, vertical = tv) { selectTab(it, true) }
         bannerHolder = FrameLayout(this).apply { visibility = View.GONE }
-        column.addView(bannerHolder, LinearLayout.LayoutParams(-1, -2).apply {
-            leftMargin = gut; rightMargin = gut; bottomMargin = dp(10)
-        })
-
         content = FrameLayout(this)
-        column.addView(content, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        if (tv) {
+            // Two panes (docs 5.1): a 240 dp tab rail on the left, the content on the right.
+            val body = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            body.addView(tabBar, LinearLayout.LayoutParams(dp(240), -2).apply { leftMargin = dp(Theme.TV_GUTTER - 4) })
+            val right = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            right.addView(bannerHolder, LinearLayout.LayoutParams(-1, -2))
+            right.addView(content, LinearLayout.LayoutParams(-1, 0, 1f))
+            body.addView(right, LinearLayout.LayoutParams(0, -1, 1f).apply { leftMargin = dp(16) })
+            column.addView(body, LinearLayout.LayoutParams(-1, 0, 1f))
+        } else {
+            column.addView(tabBar, LinearLayout.LayoutParams(-1, -2).apply {
+                leftMargin = Ui.gutter(this@PickerActivity) - dp(4); rightMargin = Ui.gutter(this@PickerActivity) - dp(4)
+            })
+            column.addView(Ui.rule(this), LinearLayout.LayoutParams(-1, Theme.rule(this)).apply { topMargin = dp(4) })
+            column.addView(bannerHolder, LinearLayout.LayoutParams(-1, -2))
+            column.addView(content, LinearLayout.LayoutParams(-1, 0, 1f))
+        }
         root.addView(column, FrameLayout.LayoutParams(-1, -1))
 
-        bar = PickUi.FloatingBar(this, "Next") { next() }
+        bar = PickUi.FloatingBar(this, getString(R.string.pick_send)) { next() }
         root.addView(bar, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         return root
     }
 
     // ---------- tabs ----------
 
-    /**
-     * The sliding pill is drawn in onDraw rather than added as a child view. A plain View child with
-     * match_parent height would make this wrap_content bar take all the free height, leaving the
-     * list area below it zero tall.
-     */
-    private inner class TabBar : FrameLayout(this@PickerActivity) {
-        private val labels = ArrayList<TextView>()
-        private val indicator = android.graphics.drawable.GradientDrawable().apply { setColor(Theme.C_SEND); cornerRadius = dp(6).toFloat() }
-        private val pad = dp(4)
-        private var index = 0
-        private var pos = 0f
-        private var anim: android.animation.ValueAnimator? = null
+    private fun textIdx() = defs.indexOfFirst { it.id == TAB_TEXT }
 
-        init {
-            setWillNotDraw(false)
-            background = PickUi.rounded(context, Theme.alpha(Theme.SURFACE_2, 0.9f), 22, Theme.STROKE)
-            setPadding(pad, pad, pad, pad)
-            val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
-            val h = dp(if (Ui.tv(context)) 48 else 40)
-            defs.forEachIndexed { i, d ->
-                val t = Ui.text(context, d.label, 13.5f, Theme.MUTED, Theme.MEDIUM).apply {
-                    gravity = Gravity.CENTER
-                    maxLines = 1
-                    contentDescription = d.label
-                }
-                Ui.focusFill(t, null, 1.04f, 6f, null)
-                t.setOnClickListener { Ui.haptic(it); selectTab(i, true) }
-                labels.add(t)
-                row.addView(t, LinearLayout.LayoutParams(0, h, 1f))
-            }
-            addView(row, LayoutParams(-1, -2))
-        }
-
-        override fun onDraw(c: android.graphics.Canvas) {
-            val tw = (width - 2 * pad) / defs.size.toFloat()
-            if (tw <= 0f) return
-            val l = pad + pos * tw
-            indicator.setBounds(l.toInt(), pad, (l + tw).toInt(), height - pad)
-            indicator.draw(c)
-        }
-
-        override fun onDetachedFromWindow() {
-            super.onDetachedFromWindow()
-            anim?.cancel()
-        }
-
-        private fun place(animate: Boolean) {
-            anim?.cancel()
-            val to = index.toFloat()
-            if (animate && Anim.on(context) && isLaidOut) {
-                anim = android.animation.ValueAnimator.ofFloat(pos, to).apply {
-                    duration = Theme.DUR
-                    interpolator = Theme.EASE_OUT
-                    addUpdateListener { pos = it.animatedValue as Float; invalidate() }
-                    start()
-                }
-            } else {
-                pos = to
-                invalidate()
-            }
-        }
-
-        fun select(i: Int, animate: Boolean) {
-            index = i
-            labels.forEachIndexed { n, t ->
-                t.setTextColor(if (n == i) Color.WHITE else Theme.MUTED)
-                t.typeface = if (n == i) Theme.BOLD else Theme.MEDIUM
-            }
-            place(animate)
-        }
-
-        fun focusTab(i: Int) { labels.getOrNull(i)?.requestFocus() }
-    }
-
-    private fun selectTab(idx: Int, animate: Boolean) {
+    private fun selectTab(idx: Int, user: Boolean, force: Boolean = false) {
         if (idx == cur) return
+        // Text is sent on its own: switching to it with files selected asks first.
+        if (idx == textIdx() && picks.isNotEmpty() && !force) { askClearForText(idx); return }
         val old = if (cur >= 0) paneViews[cur] else null
         val v = ensurePane(idx)
         cur = idx
-        tabBar.select(idx, animate)
-        if (animate) Anim.crossfade(old, v) else {
+        tabBar.select(idx)
+        if (user && Anim.on(this) && old != null) Anim.crossfade(old, v) else {
             old?.visibility = View.GONE
             v.visibility = View.VISIBLE
             v.alpha = 1f
         }
         refreshBanner()
         refreshSelectAll()
+        updateBar(user)
+        if (defs[idx].id == TAB_TEXT) textPane?.focus()
+    }
+
+    private fun askClearForText(textTab: Int) {
+        val n = picks.values.sumOf { it.count }
+        val c = Ui.column(this)
+        c.addView(Ui.text(this, getString(R.string.pick_clear_title), Type.TITLE))
+        c.addView(Ui.text(this, resources.getQuantityString(R.plurals.pick_clear_msg, n, n), Type.BODY).apply {
+            setPadding(0, dp(8), 0, dp(20))
+        })
+        var h: Sheets.Handle? = null
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val keep = Ui.secondaryButton(this, getString(R.string.pick_keep_files)) { h?.dismiss() }
+        val clear = Ui.jobButton(this, getString(R.string.pick_clear), Job.DANGER) {
+            h?.dismiss()
+            picks.clear()
+            for (p in panes.values) p.adapter.notifyDataSetChanged()
+            onPicksChanged()
+            selectTab(textTab, true)
+        }
+        row.addView(keep, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(12) })
+        row.addView(clear, LinearLayout.LayoutParams(0, -2, 1f))
+        c.addView(row, LinearLayout.LayoutParams(-1, -2))
+        h = Sheets.show(root, c)
+        confirm = h
+        keep.post { keep.requestFocus() }
     }
 
     private fun ensurePane(idx: Int): View {
@@ -500,6 +295,7 @@ class PickerActivity : Activity() {
             TAB_PHOTOS -> buildMediaPane(MediaKind.IMAGE)
             TAB_VIDEOS -> buildMediaPane(MediaKind.VIDEO)
             TAB_MUSIC -> buildMediaPane(MediaKind.AUDIO)
+            TAB_TEXT -> buildTextPane()
             else -> buildFilesPane()
         }
         v.visibility = View.GONE
@@ -508,7 +304,7 @@ class PickerActivity : Activity() {
         return v
     }
 
-    private fun paneFor(kind: MediaKind): Pane? = panes[kindTab(kind)]
+    private fun paneFor(kind: MediaKind): PickPane? = panes[kindTab(kind)]
 
     private fun kindTab(kind: MediaKind) = when (kind) {
         MediaKind.IMAGE -> TAB_PHOTOS
@@ -523,234 +319,36 @@ class PickerActivity : Activity() {
         else -> null
     }
 
-    // ---------- pane with loading / empty / permission states ----------
+    // ---------- text tab ----------
 
-    private inner class Pane(val list: AbsListView, val adapter: BaseAdapter, top: View?) {
-        val view: View
-        private val stateBox = LinearLayout(this@PickerActivity).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(32), dp(24), dp(32), dp(80))
-            visibility = View.GONE
+    private fun buildTextPane(): View {
+        val p = PickerTextPane(this, typed, inset, { clipboardText() }, { toast(it, 2) }) { t ->
+            typed = t
+            updateBar(false)
         }
-        private var pulse: android.animation.Animator? = null
-
-        init {
-            val frame = FrameLayout(this@PickerActivity)
-            frame.addView(list, FrameLayout.LayoutParams(-1, -1))
-            frame.addView(stateBox, FrameLayout.LayoutParams(-1, -1))
-            if (top == null) view = frame
-            else view = LinearLayout(this@PickerActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                addView(top, LinearLayout.LayoutParams(-1, -2).apply {
-                    leftMargin = gut; rightMargin = gut; bottomMargin = dp(6)
-                })
-                addView(frame, LinearLayout.LayoutParams(-1, 0, 1f))
-            }
-            applyPadding()
-        }
-
-        fun applyPadding() {
-            list.setPadding(gut, dp(4), gut, dp(110) + bottomInset)
-        }
-
-        fun showContent() {
-            pulse?.cancel(); pulse = null
-            if (stateBox.visibility == View.VISIBLE) Anim.crossfade(stateBox, list)
-        }
-
-        fun showMessage(
-            icon: Int, tint: Int, title: String, msg: String,
-            action: String? = null, onAction: (() -> Unit)? = null, loading: Boolean = false,
-        ) {
-            pulse?.cancel(); pulse = null
-            stateBox.removeAllViews()
-            val badge = FrameLayout(this@PickerActivity).apply {
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(Theme.alpha(tint, 0.15f))
-                }
-            }
-            badge.addView(Ui.icon(this@PickerActivity, icon, tint, 32),
-                FrameLayout.LayoutParams(dp(32), dp(32), Gravity.CENTER))
-            stateBox.addView(badge, LinearLayout.LayoutParams(dp(76), dp(76)))
-            stateBox.addView(Ui.title(this@PickerActivity, title, 20f).apply { gravity = Gravity.CENTER },
-                LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(18) })
-            stateBox.addView(Ui.text(this@PickerActivity, msg, 14.5f, Theme.MUTED).apply {
-                gravity = Gravity.CENTER
-                maxWidth = dp(320)
-            }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) })
-            if (action != null && onAction != null) {
-                stateBox.addView(Ui.jobButton(this@PickerActivity, action, Job.SEND, null, onAction),
-                    LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(22) })
-            }
-            if (stateBox.visibility != View.VISIBLE) Anim.crossfade(list, stateBox)
-            else if (Anim.on(this@PickerActivity)) Anim.enter(stateBox)
-        }
-
-        fun showLoading(msg: String) =
-            showMessage(R.drawable.ic_refresh, Theme.ACCENT, "Just a moment", msg, loading = true)
+        textPane = p
+        return p.view
     }
 
-    // ---------- grid rows and cells ----------
-
-    private class SquareFrame(ctx: Context) : FrameLayout(ctx) {
-        override fun onMeasure(w: Int, h: Int) = super.onMeasure(w, w)
-    }
-
-    private class Cell(
-        val root: SquareFrame, val box: FrameLayout, val iv: ImageView,
-        val dur: TextView, val check: PickUi.Check, val ring: View,
-    )
-
-    private fun newCell(): Cell {
-        val ctx = this
-        val root = SquareFrame(ctx)
-        val box = FrameLayout(ctx).apply {
-            background = ColorDrawable(Theme.SURFACE_2)
-            outlineProvider = PickUi.roundOutline(dp(12).toFloat())
-            clipToOutline = true
-        }
-        val iv = ImageView(ctx).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
-        box.addView(iv, FrameLayout.LayoutParams(-1, -1))
-        val dur = Ui.text(ctx, "", 11.5f, Color.WHITE, Theme.BOLD).apply {
-            background = PickUi.rounded(ctx, 0x99000000.toInt(), 8)
-            setPadding(dp(6), dp(3), dp(6), dp(3))
-            visibility = View.GONE
-        }
-        box.addView(dur, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply {
-            leftMargin = dp(6); bottomMargin = dp(6)
-        })
-        val ring = View(ctx).apply {
-            background = GradientDrawable().apply {
-                setColor(Color.TRANSPARENT)
-                cornerRadius = dp(12).toFloat()
-                setStroke(dp(3), Theme.ACCENT)
-            }
-            alpha = 0f
-        }
-        box.addView(ring, FrameLayout.LayoutParams(-1, -1))
-        root.addView(box, FrameLayout.LayoutParams(-1, -1))
-        val check = PickUi.Check(ctx, 24, true)
-        root.addView(check, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply {
-            topMargin = dp(6); rightMargin = dp(6)
-        })
-        return Cell(root, box, iv, dur, check, ring).also { root.tag = it }
-    }
-
-    private fun bindCell(c: Cell, sel: Boolean, animate: Boolean) {
-        val s = if (sel) 0.88f else 1f
-        val a = if (sel) 1f else 0f
-        c.box.animate().cancel(); c.ring.animate().cancel()
-        if (animate && Anim.on(this)) {
-            c.box.animate().scaleX(s).scaleY(s).setStartDelay(0).setDuration(Theme.D_TAP).setInterpolator(Theme.EASE_ENTER).start()
-            c.ring.animate().alpha(a).setStartDelay(0).setDuration(Theme.DUR_FAST).start()
-        } else {
-            c.box.scaleX = s; c.box.scaleY = s; c.ring.alpha = a
-        }
-        c.check.set(sel, animate)
-    }
-
-    private inner class GridAdapter(val kind: MediaKind, val px: Int) : BaseAdapter() {
-        override fun getCount() = mediaItems[kind]?.size ?: 0
-        override fun getItem(position: Int): Any? = mediaItems[kind]?.getOrNull(position)
-        override fun getItemId(position: Int) = position.toLong()
-        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
-            val c = (convertView?.tag as? Cell) ?: newCell()
-            val m = mediaItems[kind]!![position]
-            Thumbs.media(c.iv, m, px)
-            if (kind == MediaKind.VIDEO && m.durationMs > 0) {
-                c.dur.text = PickUi.fmtDuration(m.durationMs)
-                c.dur.visibility = View.VISIBLE
-            } else c.dur.visibility = View.GONE
-            c.root.contentDescription = m.name
-            bindCell(c, picks.containsKey("m:${m.uri}"), false)
-            return c.root
-        }
-    }
-
-    // ---------- list rows ----------
-
-    private class RowHolder(
-        val root: LinearLayout, val iv: ImageView, val title: TextView, val sub: TextView,
-        val chip: TextView, val check: PickUi.Check,
-    )
-
-    private fun newRow(): RowHolder {
-        val ctx = this
-        val root = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = dp(if (Ui.tv(ctx)) 72 else 64)
-            setPadding(dp(10), dp(8), dp(14), dp(8))
-        }
-        val s = dp(46)
-        val iv = ImageView(ctx).apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            background = ColorDrawable(Theme.SURFACE_3)
-            outlineProvider = PickUi.roundOutline(dp(11).toFloat())
-            clipToOutline = true
-        }
-        root.addView(iv, LinearLayout.LayoutParams(s, s).apply { rightMargin = dp(14) })
-        val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-        val title = Ui.text(ctx, "", 15.5f, Theme.TEXT, Theme.MEDIUM).apply {
-            maxLines = 1; ellipsize = TextUtils.TruncateAt.END
-        }
-        val sub = Ui.text(ctx, "", 12.5f, Theme.MUTED).apply {
-            maxLines = 1; ellipsize = TextUtils.TruncateAt.END
-        }
-        col.addView(title)
-        col.addView(sub, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(3) })
-        root.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
-        val chip = Ui.tag(ctx, "Split").apply { visibility = View.GONE }
-        root.addView(chip, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8) })
-        val check = PickUi.Check(ctx, 26, false)
-        root.addView(check, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(12) })
-        return RowHolder(root, iv, title, sub, chip, check).also { root.tag = it }
-    }
-
-    private fun setRowSel(h: RowHolder, sel: Boolean) {
-        h.root.background = if (sel) PickUi.rounded(this, Theme.SURFACE_2, 6, Theme.C_SEND, 2)
-        else PickUi.rounded(this, Theme.alpha(Theme.SURFACE, 0.75f), 16, Theme.STROKE)
-    }
-
-    private fun bindRowSel(h: RowHolder, sel: Boolean, animate: Boolean) {
-        setRowSel(h, sel)
-        h.check.set(sel, animate)
-    }
-
-    private inner class RowsAdapter(val size: () -> Int, val bind: (RowHolder, Int) -> Unit) : BaseAdapter() {
-        override fun getCount() = size()
-        override fun getItem(position: Int): Any? = null
-        override fun getItemId(position: Int) = position.toLong()
-        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
-            val h = (convertView?.tag as? RowHolder) ?: newRow()
-            bind(h, position)
-            return h.root
-        }
-    }
-
-    private fun styleList(l: ListView) {
-        l.divider = ColorDrawable(Color.TRANSPARENT)
-        l.dividerHeight = dp(8)
-        l.selector = PickUi.selector(this, 16)
-        l.setDrawSelectorOnTop(true)
-        l.cacheColorHint = Color.TRANSPARENT
-        l.clipToPadding = false
-        l.overScrollMode = View.OVER_SCROLL_NEVER
-        l.isVerticalScrollBarEnabled = false
-    }
+    private fun clipboardText(): String? = try {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = cm.primaryClip
+        if (clip == null || clip.itemCount == 0) null
+        else clip.getItemAt(0).coerceToText(this)?.toString()?.takeIf { it.isNotBlank() }
+    } catch (_: Exception) { null }
 
     // ---------- media tabs (photos / videos / music) ----------
 
+    private fun isPicked(m: MediaItem) = picks.containsKey("m:${m.uri}")
+
     private fun buildMediaPane(kind: MediaKind): View {
         val tab = kindTab(kind)
-        val pane: Pane
+        val pane: PickPane
         if (kind == MediaKind.AUDIO) {
             val list = ListView(this)
-            styleList(list)
+            PickerViews.styleList(this, list)
             val px = dp(96)
-            val ad = RowsAdapter({ mediaItems[kind]?.size ?: 0 }) { h, i ->
+            val ad = RowsAdapter(this, { mediaItems[kind]?.size ?: 0 }) { h, i ->
                 val m = mediaItems[kind]!![i]
                 Thumbs.media(h.iv, m, px)
                 h.title.text = m.name.substringBeforeLast('.')
@@ -760,42 +358,44 @@ class PickerActivity : Activity() {
                 parts += Io.bytes(m.size)
                 h.sub.text = parts.joinToString(" · ")
                 h.chip.visibility = View.GONE
-                bindRowSel(h, picks.containsKey("m:${m.uri}"), false)
+                h.check.set(isPicked(m), false)
             }
             list.adapter = ad
             list.setOnItemClickListener { _, v, pos, _ ->
                 val m = mediaItems[kind]?.getOrNull(pos) ?: return@setOnItemClickListener
                 toggle(pickOf(m))
-                (v.tag as? RowHolder)?.let { bindRowSel(it, picks.containsKey("m:${m.uri}"), true) }
+                (v.tag as? PickerViews.RowHolder)?.check?.set(isPicked(m), true)
                 Ui.haptic(v)
             }
-            pane = Pane(list, ad, null)
+            pane = PickPane(this, list, ad, null, inset)
         } else {
-            val cols = when { Ui.tv(this) -> 6; Ui.wide(this) -> 5; else -> 3 }
-            val gap = dp(6)
-            val gridW = resources.displayMetrics.widthPixels - 2 * gut
-            val px = ((gridW - (cols - 1) * gap) / cols).coerceAtLeast(dp(80))
+            val tv = Ui.tv(this)
+            val cols = when { tv -> 6; Ui.wide(this) -> 5; else -> 3 }
+            val gap = dp(if (tv) 8 else 2)
+            val avail = resources.displayMetrics.widthPixels -
+                if (tv) dp(Theme.TV_GUTTER + 240 + 16 + 16 + 16) else 2 * Ui.gutter(this)
+            val px = ((avail - (cols - 1) * gap) / cols).coerceAtLeast(dp(80))
             val grid = GridView(this).apply {
                 numColumns = cols
                 horizontalSpacing = gap
                 verticalSpacing = gap
                 stretchMode = GridView.STRETCH_COLUMN_WIDTH
-                selector = PickUi.selector(this@PickerActivity, 12)
+                selector = PickUi.selector(this@PickerActivity, 0)
                 setDrawSelectorOnTop(true)
                 cacheColorHint = Color.TRANSPARENT
                 clipToPadding = false
                 overScrollMode = View.OVER_SCROLL_NEVER
                 isVerticalScrollBarEnabled = false
             }
-            val ad = GridAdapter(kind, px)
+            val ad = GridAdapter(this, { mediaItems[kind] }, kind == MediaKind.VIDEO, px, ::isPicked)
             grid.adapter = ad
             grid.setOnItemClickListener { _, v, pos, _ ->
                 val m = mediaItems[kind]?.getOrNull(pos) ?: return@setOnItemClickListener
                 toggle(pickOf(m))
-                (v.tag as? Cell)?.let { bindCell(it, picks.containsKey("m:${m.uri}"), true) }
+                (v.tag as? Cell)?.let { PickerViews.bindCell(it, isPicked(m), true) }
                 Ui.haptic(v)
             }
-            pane = Pane(grid, ad, null)
+            pane = PickPane(this, grid, ad, null, inset)
         }
         panes[tab] = pane
         loadMedia(kind, pane)
@@ -805,25 +405,31 @@ class PickerActivity : Activity() {
     private fun pickOf(m: MediaItem) = Pick("m:${m.uri}", KIND_MEDIA, m.name, 1, m.size, m.name, m.uri,
         { listOf(Media.toSendItem(m)) })
 
-    private fun loadMedia(kind: MediaKind, pane: Pane) {
+    private fun loadMedia(kind: MediaKind, pane: PickPane) {
         val acc = Media.access(this, kind)
         lastAccess[kind] = acc
+        val icon = when (kind) { MediaKind.IMAGE -> R.drawable.ic_photo; MediaKind.VIDEO -> R.drawable.ic_video; MediaKind.AUDIO -> R.drawable.ic_music }
         if (acc == Media.Access.NONE) {
             mediaItems[kind] = emptyList()
             pane.adapter.notifyDataSetChanged()
-            val what = when (kind) { MediaKind.IMAGE -> "photos"; MediaKind.VIDEO -> "videos"; MediaKind.AUDIO -> "music" }
-            val icon = when (kind) { MediaKind.IMAGE -> R.drawable.ic_photo; MediaKind.VIDEO -> R.drawable.ic_video; MediaKind.AUDIO -> R.drawable.ic_music }
-            val tint = when (kind) { MediaKind.IMAGE -> Theme.CAT_PHOTOS; MediaKind.VIDEO -> Theme.CAT_VIDEOS; MediaKind.AUDIO -> Theme.CAT_MUSIC }
             val settings = kind in denied && Build.VERSION.SDK_INT >= 23 &&
                 Media.permissions(kind).firstOrNull()?.let { !shouldShowRequestPermissionRationale(it) } == true
-            pane.showMessage(icon, tint, "Allow access to $what",
-                "FastDrop only reads $what to show them here. Nothing leaves your device except what you send.",
-                if (settings) "Open settings" else "Allow access", onAction = { requestMedia(kind) })
+            val (title, msg) = when (kind) {
+                MediaKind.IMAGE -> getString(R.string.pick_perm_photos) to getString(R.string.pick_perm_photos_why)
+                MediaKind.VIDEO -> getString(R.string.pick_perm_videos) to getString(R.string.pick_perm_videos_why)
+                MediaKind.AUDIO -> getString(R.string.pick_perm_music) to getString(R.string.pick_perm_music_why)
+            }
+            pane.showMessage(icon, title, msg,
+                getString(if (settings) R.string.pick_open_settings else R.string.pick_allow_access), onAction = { requestMedia(kind) })
             refreshBanner(); refreshSelectAll()
             return
         }
         val first = mediaItems[kind] == null
-        if (first) pane.showLoading("Looking for your ${if (kind == MediaKind.AUDIO) "music" else if (kind == MediaKind.IMAGE) "photos" else "videos"}…")
+        if (first) pane.showLoading(getString(when (kind) {
+            MediaKind.IMAGE -> R.string.pick_loading_photos
+            MediaKind.VIDEO -> R.string.pick_loading_videos
+            MediaKind.AUDIO -> R.string.pick_loading_music
+        }))
         val gen = (loadGen[kind] ?: 0) + 1
         loadGen[kind] = gen
         val app = applicationContext
@@ -834,19 +440,17 @@ class PickerActivity : Activity() {
                 mediaItems[kind] = list
                 pane.adapter.notifyDataSetChanged()
                 if (list.isEmpty()) {
-                    val (icon, tint, t, m) = when (kind) {
-                        MediaKind.IMAGE -> Quad(R.drawable.ic_photo, Theme.CAT_PHOTOS, "No photos yet", "Photos on this device will show up here.")
-                        MediaKind.VIDEO -> Quad(R.drawable.ic_video, Theme.CAT_VIDEOS, "No videos yet", "Videos on this device will show up here.")
-                        MediaKind.AUDIO -> Quad(R.drawable.ic_music, Theme.CAT_MUSIC, "No music yet", "Songs on this device will show up here.")
+                    val (t, m) = when (kind) {
+                        MediaKind.IMAGE -> getString(R.string.pick_empty_photos) to getString(R.string.pick_empty_photos_meta)
+                        MediaKind.VIDEO -> getString(R.string.pick_empty_videos) to getString(R.string.pick_empty_videos_meta)
+                        MediaKind.AUDIO -> getString(R.string.pick_empty_music) to getString(R.string.pick_empty_music_meta)
                     }
-                    pane.showMessage(icon, tint, t, m)
+                    pane.showMessage(icon, t, m)
                 } else pane.showContent()
                 refreshBanner(); refreshSelectAll()
             }
         }
     }
-
-    private data class Quad(val a: Int, val b: Int, val c: String, val d: String)
 
     private fun requestMedia(kind: MediaKind) {
         if (Build.VERSION.SDK_INT < 23) return
@@ -862,7 +466,7 @@ class PickerActivity : Activity() {
         try {
             startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
         } catch (_: Exception) {
-            toast("Open Settings, then Apps, then FastDrop, then Permissions", 2)
+            toast(getString(R.string.pick_open_settings_manual), 2)
         }
     }
 
@@ -875,50 +479,50 @@ class PickerActivity : Activity() {
         paneFor(kind)?.let { loadMedia(kind, it) }
     }
 
-    /** Android 14+: shown when the user only shared some photos or videos. */
+    /** Android 14+: shown when the user only shared some photos or videos. Neutral full-bleed row. */
     private fun refreshBanner() {
         bannerHolder.removeAllViews()
         val kind = tabKind(defs.getOrNull(cur)?.id ?: "")
         val partial = Build.VERSION.SDK_INT >= 34 && kind != null && kind != MediaKind.AUDIO &&
             lastAccess[kind] == Media.Access.PARTIAL
         if (!partial || kind == null) { bannerHolder.visibility = View.GONE; return }
-        val what = if (kind == MediaKind.IMAGE) "photos" else "videos"
-        val row = Ui.row(this, R.drawable.ic_gallery, "Showing only the $what you chose",
-            "Tap to allow all $what", Ui.icon(this, R.drawable.ic_chevron, Theme.MUTED, 20)) { requestMedia(kind) }
-        bannerHolder.background = PickUi.rounded(this, Theme.alpha(Theme.WARNING, 0.10f), 18, Theme.alpha(Theme.WARNING, 0.35f))
+        val photos = kind == MediaKind.IMAGE
+        val row = Ui.row(this, R.drawable.ic_alert,
+            getString(if (photos) R.string.pick_partial_photos else R.string.pick_partial_videos),
+            getString(if (photos) R.string.pick_partial_photos_meta else R.string.pick_partial_videos_meta),
+            Ui.chevron(this)) { requestMedia(kind) }
+        bannerHolder.setBackgroundColor(Theme.SURFACE_2)
         bannerHolder.addView(row, FrameLayout.LayoutParams(-1, -2))
-        val first = bannerHolder.visibility != View.VISIBLE
         bannerHolder.visibility = View.VISIBLE
-        if (first) Anim.enter(bannerHolder)
     }
 
     // ---------- apps tab ----------
 
     private fun buildAppsPane(): View {
         val list = ListView(this)
-        styleList(list)
-        val ad = RowsAdapter({ apps.size }) { h, i ->
+        PickerViews.styleList(this, list)
+        val ad = RowsAdapter(this, { apps.size }) { h, i ->
             val a = apps[i]
             Thumbs.app(h.iv, a.pkg)
             h.title.text = a.label
             val v = if (a.version.isBlank()) "" else "v${a.version.removePrefix("v")} · "
             h.sub.text = v + Io.bytes(a.size)
             h.chip.visibility = if (a.apks.size > 1) View.VISIBLE else View.GONE
-            bindRowSel(h, picks.containsKey("a:${a.pkg}"), false)
+            h.check.set(picks.containsKey("a:${a.pkg}"), false)
         }
         list.adapter = ad
         list.setOnItemClickListener { _, v, pos, _ ->
             val a = apps.getOrNull(pos) ?: return@setOnItemClickListener
             toggle(pickOf(a))
-            (v.tag as? RowHolder)?.let { bindRowSel(it, picks.containsKey("a:${a.pkg}"), true) }
+            (v.tag as? PickerViews.RowHolder)?.check?.set(picks.containsKey("a:${a.pkg}"), true)
             Ui.haptic(v)
         }
-        val toggleRow = Ui.toggleRow(this, "Show system apps", "Include apps that came with the device",
+        val toggleRow = Ui.toggleRow(this, getString(R.string.pick_system_apps), getString(R.string.pick_system_apps_meta),
             Hub.showSystemApps) { on ->
             Hub.showSystemApps = on
             loadApps()
         }
-        val pane = Pane(list, ad, toggleRow)
+        val pane = PickPane(this, list, ad, toggleRow, inset)
         panes[TAB_APPS] = pane
         loadApps()
         return pane.view
@@ -929,7 +533,7 @@ class PickerActivity : Activity() {
 
     private fun loadApps() {
         val pane = panes[TAB_APPS] ?: return
-        if (!appsLoaded) pane.showLoading("Reading your apps…")
+        if (!appsLoaded) pane.showLoading(getString(R.string.pick_loading_apps))
         val gen = ++appsGen
         val app = applicationContext
         val sys = Hub.showSystemApps
@@ -940,8 +544,8 @@ class PickerActivity : Activity() {
                 apps = list
                 appsLoaded = true
                 pane.adapter.notifyDataSetChanged()
-                if (list.isEmpty()) pane.showMessage(R.drawable.ic_apps, Theme.CAT_APPS, "No apps found",
-                    "Turn on system apps above to see more.")
+                if (list.isEmpty()) pane.showMessage(R.drawable.ic_apps, getString(R.string.pick_empty_apps),
+                    getString(R.string.pick_empty_apps_meta))
                 else pane.showContent()
                 refreshSelectAll()
             }
@@ -951,27 +555,25 @@ class PickerActivity : Activity() {
     // ---------- files tab ----------
 
     private fun buildFilesPane(): View {
-        val page = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(gut, dp(4), gut, dp(110) + bottomInset)
+        val page = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun action(icon: Int, kind: String, title: String, sub: String, onClick: () -> Unit) {
+            val p = Theme.plateFor(kind)
+            page.addView(Ui.row(this, null, title, sub, Ui.chevron(this),
+                lead = Ui.plate(this, icon, p.fill, p.on, if (Ui.tv(this)) 48 else 40), onClick = onClick),
+                LinearLayout.LayoutParams(-1, -2))
         }
-        val card = Ui.column(this)
-        fun action(icon: Int, tint: Int, title: String, sub: String, onClick: () -> Unit) {
-            card.addView(Ui.row(this, icon, title, sub, Ui.icon(this, R.drawable.ic_chevron, Theme.MUTED, 20), onClick = onClick))
+        action(R.drawable.ic_file, "files", getString(R.string.pick_files), getString(R.string.pick_files_meta), ::pickFiles)
+        page.addView(Ui.rule(this))
+        action(R.drawable.ic_folder, "files", getString(R.string.pick_folder), getString(R.string.pick_folder_meta), ::pickFolder)
+        page.addView(Ui.rule(this))
+        action(R.drawable.ic_storage, "files", getString(R.string.pick_browse), getString(R.string.pick_browse_meta), ::browseStorage)
+        page.addView(Ui.section(this, getString(R.string.pick_picked_files)), LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
+        val status = Ui.text(this, getString(R.string.pick_reading_files), Type.META).apply {
+            visibility = View.GONE
+            setPadding(Ui.gutter(this@PickerActivity), 0, Ui.gutter(this@PickerActivity), dp(8))
         }
-        action(R.drawable.ic_file, Theme.CAT_FILES, "Pick files", "Documents, archives, anything", ::pickFiles)
-        card.addView(Ui.rule(this))
-        action(R.drawable.ic_folder, Theme.WARNING, "Pick a folder", "Send a whole folder with its files", ::pickFolder)
-        card.addView(Ui.rule(this))
-        action(R.drawable.ic_storage, Theme.CAT_MUSIC, "Browse storage", "USB drives, SD cards and system folders", ::browseStorage)
-        page.addView(card, LinearLayout.LayoutParams(-1, -2))
-
-        page.addView(Ui.section(this, "Picked files"), LinearLayout.LayoutParams(-2, -2).apply {
-            topMargin = dp(24); bottomMargin = dp(10); leftMargin = dp(4)
-        })
-        val status = Ui.text(this, "", 13.5f, Theme.ACCENT_2, Theme.MEDIUM).apply { visibility = View.GONE }
         filesStatus = status
-        page.addView(status, LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(10); leftMargin = dp(4) })
+        page.addView(status, LinearLayout.LayoutParams(-1, -2))
         val l = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         filesList = l
         page.addView(l, LinearLayout.LayoutParams(-1, -2))
@@ -979,52 +581,49 @@ class PickerActivity : Activity() {
             overScrollMode = View.OVER_SCROLL_NEVER
             isVerticalScrollBarEnabled = false
             clipToPadding = false
+            setPadding(0, 0, 0, dp(96) + bottomInset)
             addView(page, FrameLayout.LayoutParams(-1, -2))
         }
-        // The page keeps its own bottom padding; keep it in step with the nav bar.
-        sv.setOnApplyWindowInsetsListener { _, ins ->
-            page.setPadding(gut, dp(4), gut, dp(110) + Ui.insetsOf(ins)[3])
-            ins
-        }
+        filesScroll = sv
         rebuildPicked()
         return sv
     }
 
+    private var filesScroll: ScrollView? = null
+
     private fun rebuildPicked() {
         val l = filesList ?: return
+        filesScroll?.setPadding(0, 0, 0, dp(96) + bottomInset)
         l.removeAllViews()
         val mine = picks.values.filter { it.kind == KIND_FILE }
         if (mine.isEmpty()) {
-            l.addView(Ui.text(this, "Nothing picked yet. Files you add here stay selected while you switch tabs.",
-                14f, Theme.MUTED).apply { setPadding(dp(4), 0, dp(4), 0) })
+            l.addView(Ui.text(this, getString(R.string.pick_nothing_picked), Type.META).apply {
+                setPadding(Ui.gutter(this@PickerActivity), dp(4), Ui.gutter(this@PickerActivity), dp(16))
+            })
             return
         }
         val px = dp(96)
-        val views = ArrayList<View>()
         for (p in mine) {
-            val h = newRow()
+            val h = PickerViews.newRow(this)
             Thumbs.file(h.iv, p.thumbName, p.thumbUri, px)
             h.title.text = p.title
-            h.sub.text = if (p.count > 1) "${p.count} files · ${Io.bytes(p.size)}" else Io.bytes(p.size)
+            h.sub.text = if (p.count > 1) resources.getQuantityString(R.plurals.pick_files_size, p.count, p.count, Io.bytes(p.size))
+            else Io.bytes(p.size)
             h.chip.visibility = View.GONE
-            bindRowSel(h, true, false)
-            h.root.isFocusable = true
+            h.check.set(true, false)
             Ui.focusFill(h.root, null, 1.02f, 0f, null)
             h.root.setOnClickListener {
                 Ui.haptic(it)
                 toggle(p)
             }
-            l.addView(h.root, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
-            views += h.root
+            l.addView(h.root, LinearLayout.LayoutParams(-1, -2))
+            l.addView(Ui.rule(this))
         }
     }
 
     private fun setFilesBusy(delta: Int) {
         filesBusy = (filesBusy + delta).coerceAtLeast(0)
-        filesStatus?.let {
-            it.text = "Reading files…"
-            it.visibility = if (filesBusy > 0) View.VISIBLE else View.GONE
-        }
+        filesStatus?.visibility = if (filesBusy > 0) View.VISIBLE else View.GONE
     }
 
     private fun filesIntent(action: String) = Intent(action).apply {
@@ -1070,19 +669,18 @@ class PickerActivity : Activity() {
     /** Explains "All files access" before sending the user to Settings. */
     private fun askAllFiles() {
         val c = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        c.addView(Ui.title(this, "Browse all files", 22f))
-        c.addView(Ui.text(this, "Allow \"All files access\" to browse every folder, including USB drives and SD cards. " +
-            "Or choose media only to keep it limited.", 14.5f, Theme.MUTED).apply { setPadding(0, dp(10), 0, dp(20)) })
+        c.addView(Ui.text(this, getString(R.string.pick_allfiles_title), Type.TITLE))
+        c.addView(Ui.text(this, getString(R.string.pick_allfiles_msg), Type.BODY).apply { setPadding(0, dp(8), 0, dp(20)) })
         var handle: Sheets.Handle? = null
-        val allow = Ui.jobButton(this, "Allow all files", Job.SEND, null) {
+        val allow = Ui.jobButton(this, getString(R.string.pick_allfiles_allow), Job.SEND, null) {
             handle?.dismiss()
             requestAllFilesAccess()
         }
         c.addView(allow, LinearLayout.LayoutParams(-1, -2))
-        c.addView(Ui.secondaryButton(this, "Media only") {
+        c.addView(Ui.secondaryButton(this, getString(R.string.pick_allfiles_media)) {
             handle?.dismiss()
             requestReadPermissions()
-        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
+        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
         handle = Sheets.show(root, c)
         allow.post { allow.requestFocus() }
     }
@@ -1181,11 +779,11 @@ class PickerActivity : Activity() {
                 if (isDestroyed) return@runOnUiThread
                 setFilesBusy(-1)
                 if (list.isEmpty()) {
-                    toast("No files found", 2)
+                    toast(getString(R.string.pick_no_files), 2)
                 } else {
                     for (p in list) picks[p.key] = p
                     val n = list.sumOf { it.count }
-                    toast(if (n == 1) "Added 1 file" else "Added $n files", 1)
+                    toast(resources.getQuantityString(R.plurals.pick_added, n, n), 1)
                     onPicksChanged()
                 }
             }
@@ -1205,11 +803,20 @@ class PickerActivity : Activity() {
         rebuildPicked()
     }
 
+    private fun onTextTab() = defs.getOrNull(cur)?.id == TAB_TEXT
+
     private fun updateBar(animate: Boolean) {
+        if (!::bar.isInitialized) return
+        if (onTextTab()) {
+            val t = typed.trim()
+            bar.updateLine(getString(R.string.pick_text_bar), resources.getQuantityString(R.plurals.pick_text_chars, t.length, t.length),
+                t.isNotEmpty(), animate)
+            return
+        }
         var n = 0
         var size = 0L
         for (p in picks.values) { n += p.count; size += p.size }
-        bar.update(n, if (n > 0) Io.bytes(size) else "", "selected", animate)
+        bar.updateLine(if (n > 0) getString(R.string.pick_n_selected, n) else "", if (n > 0) Io.bytes(size) else "", n > 0, animate)
     }
 
     /** What "Select all" covers on the current tab. */
@@ -1217,7 +824,7 @@ class PickerActivity : Activity() {
         val id = defs.getOrNull(cur)?.id ?: return emptyList()
         return when (id) {
             TAB_APPS -> apps.map { pickOf(it) }
-            TAB_FILES -> emptyList()
+            TAB_FILES, TAB_TEXT -> emptyList()
             else -> (tabKind(id)?.let { mediaItems[it] } ?: emptyList()).map { pickOf(it) }
         }
     }
@@ -1225,7 +832,7 @@ class PickerActivity : Activity() {
     private fun refreshSelectAll() {
         if (!::selectAllBtn.isInitialized) return
         val id = defs.getOrNull(cur)?.id
-        if (id == null || id == TAB_FILES) { selectAllBtn.visibility = View.GONE; return }
+        if (id == null || id == TAB_FILES || id == TAB_TEXT) { selectAllBtn.visibility = View.GONE; return }
         val kind = tabKind(id)
         val list = kind?.let { mediaItems[it] }
         val count = if (id == TAB_APPS) apps.size else list?.size ?: 0
@@ -1235,7 +842,7 @@ class PickerActivity : Activity() {
         var all = true
         if (id == TAB_APPS) { for (a in apps) if (!picks.containsKey(prefix + a.pkg)) { all = false; break } }
         else for (m in list!!) if (!picks.containsKey(prefix + m.uri)) { all = false; break }
-        selectAllBtn.text = if (all) "Clear all" else "Select all"
+        selectAllBtn.text = getString(if (all) R.string.pick_clear_all else R.string.pick_select_all)
     }
 
     private fun selectAll() {
@@ -1250,7 +857,20 @@ class PickerActivity : Activity() {
     }
 
     private fun next() {
-        if (finishing || picks.isEmpty()) return
+        if (finishing) return
+        if (onTextTab()) {
+            val t = typed.trim()
+            if (t.isEmpty()) return
+            if (t.length > ProtoV2.MAX_TEXT) { toast(getString(R.string.pick_text_too_long), 2); return }
+            // Files and text are exclusive: clear files first, then set the text.
+            Hub.selection = emptyList()
+            Hub.selectionText = t
+            finishing = true
+            setResult(RESULT_OK)
+            finish()
+            return
+        }
+        if (picks.isEmpty()) return
         finishing = true
         bar.setBusy(true)
         val chosen = picks.values.toList()
@@ -1262,7 +882,7 @@ class PickerActivity : Activity() {
                 if (items.isEmpty()) {
                     finishing = false
                     bar.setBusy(false)
-                    toast("Couldn't read the selected items", 2)
+                    toast(getString(R.string.pick_cant_read), 2)
                 } else {
                     Hub.selection = items
                     setResult(RESULT_OK)
