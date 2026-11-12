@@ -32,7 +32,7 @@ python3 fastdrop.py trust remove <id>
 `recv` accept modes: `trusted` (default: ask the first time, then trusted devices are accepted
 automatically), `ask` (always ask) and `everyone`. The prompt shows a 4-digit confirmation code
 that matches the one on the sender's screen; answer `y` (accept), `n`, or `a` (accept and always
-trust this device). `--crc` lets the receiver agree when a sender asks for CRC32 checking.
+trust this device). The receiver agrees whenever a sender asks for CRC32 checking; pass `--no-crc` to refuse.
 
 Interrupted transfers resume: run the same `send` again and only the missing chunks go over the
 wire. Unfinished files are kept as hidden `.<name>.fdpart` files in the receive folder and are

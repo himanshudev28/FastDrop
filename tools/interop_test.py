@@ -299,11 +299,11 @@ def s_f_crc(S):
     try:
         send(st_s, f, "--crc")
         check(sha(os.path.join(out, "c.bin")) == sha(f), "crc transfer hash mismatch")
-        # receiver without --crc: sender falls back to plain frames
+        # receiver with --no-crc: sender falls back to plain frames
     finally:
         rx.stop()
     out2 = tmp("f", "out2")
-    rx = Recv("f2", tmp("f", "sr2"), out2, ["--accept", "everyone"])
+    rx = Recv("f2", tmp("f", "sr2"), out2, ["--accept", "everyone", "--no-crc"])
     try:
         r = send(st_s, f, "--crc")
         check("did not agree to CRC" in r.stdout and sha(os.path.join(out2, "c.bin")) == sha(f), r.stdout)

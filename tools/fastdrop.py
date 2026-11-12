@@ -841,7 +841,7 @@ class Receiver:
         self.dir = os.path.abspath(a.dir)
         self.port = a.port
         self.mode = a.accept
-        self.use_crc = bool(a.crc)
+        self.use_crc = not a.no_crc
         self.non_interactive = bool(getattr(a, "non_interactive", False))
         self.sessions = {}
         self.slock = threading.Lock()
@@ -1395,7 +1395,8 @@ def main(argv=None):
     p = sp.add_parser("recv", help="receive files")
     p.add_argument("--dir", default="./fd_received"); p.add_argument("--name")
     p.add_argument("--accept", choices=["ask", "trusted", "everyone"], default="trusted")
-    p.add_argument("--crc", action="store_true", help="agree to CRC32 verification when the sender asks")
+    p.add_argument("--no-crc", action="store_true", help="refuse CRC32 verification even when the sender asks (default: agree)")
+    p.add_argument("--crc", action="store_true", help=argparse.SUPPRESS)  # old flag, now the default
     p.add_argument("--no-discovery", action="store_true")
     p.add_argument("--non-interactive", action="store_true", help=argparse.SUPPRESS)
     common(p); p.set_defaults(f=cmd_recv)
