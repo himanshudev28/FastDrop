@@ -11,6 +11,8 @@ No internet. No accounts. No cloud. Just open it on both devices and tap.
 [![Target SDK](https://img.shields.io/badge/targetSdk-35-informational)](#-notes)
 [![Dependencies](https://img.shields.io/badge/dependencies-1%20(ZXing)-success)](#-tech-stack)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/himanshudev28/FastDrop?logo=github)](https://github.com/himanshudev28/FastDrop/releases/latest)
+[![Build](https://github.com/himanshudev28/FastDrop/actions/workflows/release.yml/badge.svg)](https://github.com/himanshudev28/FastDrop/actions/workflows/release.yml)
 
 </div>
 
@@ -31,7 +33,7 @@ No internet. No accounts. No cloud. Just open it on both devices and tap.
 
 ## 📦 Install
 
-1. Build the APK (see [Build from source](#-build-from-source)), or grab one from [Releases](../../releases) if available.
+1. **[⬇️ Download the latest APK](https://github.com/himanshudev28/FastDrop/releases/latest)** from Releases, or [build it yourself](#-build-from-source).
 2. Copy `FastDrop.apk` to the phone or TV and open it, or run:
    ```bash
    adb install FastDrop.apk
@@ -101,7 +103,20 @@ echo "sdk.dir=$HOME/Library/Android/sdk" > local.properties   # point to your SD
 
 The APK is written to `app/build/outputs/apk/release/app-release.apk`.
 
-> ⚠️ For convenience, release builds are signed with the **debug key** so they install directly. Use your own signing config before you publish to a store.
+> ⚠️ Local release builds are signed with your **debug key** so they install directly. Use your own signing config before you publish to a store.
+
+### 🚢 Releasing (GitHub Actions)
+
+[`.github/workflows/release.yml`](.github/workflows/release.yml) builds the APK and publishes it to **Releases** with a SHA‑256 checksum and auto‑generated notes.
+
+```bash
+# 1. bump versionCode / versionName in app/build.gradle.kts (e.g. 2.1)
+git commit -am "Release 2.1"
+git tag v2.1            # tag must match versionName
+git push && git push --tags
+```
+
+Signing comes from repository secrets: `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS` and `KEY_PASSWORD`. Every release must use the same key, otherwise it won't install as an update. You can also start the workflow by hand from the **Actions** tab. A manual run attaches the APK to the run as an artifact and doesn't create a release.
 
 ---
 

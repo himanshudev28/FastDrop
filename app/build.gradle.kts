@@ -17,13 +17,24 @@ android {
         versionName = "2.0"
     }
 
+    // CI (GitHub Actions) passes a keystore through these env vars. Locally they're unset,
+    // so release builds fall back to the debug key and still install directly.
+    val ksFile = System.getenv("FASTDROP_KEYSTORE")?.let { file(it) }?.takeIf { it.exists() }
+    signingConfigs {
+        if (ksFile != null) create("release") {
+            storeFile = ksFile
+            storePassword = System.getenv("FASTDROP_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("FASTDROP_KEY_ALIAS")
+            keyPassword = System.getenv("FASTDROP_KEY_PASSWORD")
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
-            // Signed with the debug key so the APK installs directly (personal use).
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
     compileOptions {
