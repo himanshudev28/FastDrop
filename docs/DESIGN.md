@@ -11,28 +11,35 @@ Reading order: §0 concepts considered → §1 diagnosis → §2 direction and t
 
 ## ⚠ Owner feedback after the first build (overrides anything below)
 
-The owner saw the first Signal build on the phone and said it is "too minimal, all options gone".
-These rules win over every later section, including §4.1 and build step 4:
+The owner saw the first Signal build on the phone: **the look is good, keep it.** That means:
+- the clean paper / off-black surfaces;
+- the 1 px rules;
+- the numbered device ports;
+- the coloured bottom dock with Receive in ultramarine and Send in orange;
+- the solid colour plates.
 
-1. **Not minimal: every option stays one tap from Home.**
-   - Keep a **Quick send** row or grid: Apps, Photos, Videos, Music, Files, Text. Each tile is a solid plate in its category colour with an icon and a label, and it opens the picker on that tab, or the text composer for Text.
-   - Keep visible entries for Scan a code, Share with any device, and Receive / Show my QR.
-   - Don't hide features behind menus.
-2. **Colourful at rest, not only on press or focus.** A first glance should read as colourful. Colour must be visible on every screen without touching it:
-   - **Send** (orange) and **Receive** (ultramarine) as two large solid panels near the top of Home, like the old layout's two big cards but flat. They carry an icon, a title and a one-line hint, with no gradients.
-   - Category tiles in their plate colours.
-   - Device ports with a solid colour type plate.
-   - A coloured status strip.
+Do **not** redesign it again. Only the things listed below need rearranging and modifying ("too minimal, options gone"):
 
-   Neutral paper/off-black stays as the background only. Still no gradients, glows, glass, cards-in-cards or Tailwind violet.
-3. **Rich, not a settings list.**
-   - Use bigger, bolder screen titles and section headings, and a confident hierarchy.
-   - No large empty areas. Sheets size to their content, or fill the space with useful things. For example, the done sheet shows file rows with type plates or thumbnails plus actions: Open, Share, Show in folder, Send back, Send more.
-4. **The dot readout must look crafted.**
+1. **Restore the missing options on Home.**
+   - Add a **Quick send** row: Apps, Photos, Videos, Music, Files, Text.
+   - Each tile is a compact solid plate in its category colour, with an icon and a label underneath.
+   - Each tile opens the picker on that tab, or the text composer for Text.
+   - Place the row near the top, under the device status and above Nearby, so the main options are visible without scrolling.
+   - Keep Scan a code and Share with any device as rows.
+   - Every feature stays reachable from Home or Send with one tap. Nothing is hidden in menus.
+2. **A bit more colour where it helps.**
+   - Use the category plates above.
+   - Give device ports a coloured type plate.
+   - Give the status line a coloured LED or tag.
+   - Don't add big new colour panels, and don't change the overall style.
+3. **No large empty areas.**
+   - The done/transfer sheet must size to its content or use the space well.
+   - Show file rows with type plates, plus actions: Open, Share, Show in folder, Send back, Send more.
+4. **Polish the dot readout.**
    - Evenly spaced round dots and consistent glyph widths.
-   - Unlit dots very subtle (low contrast to the panel).
-   - Enough dot resolution that digits read cleanly at a glance.
-   - The unit and progress are aligned to the readout's baseline.
+   - Unlit dots very subtle.
+   - Digits that read cleanly.
+   - The unit and the % aligned to the readout.
 
 ---
 
