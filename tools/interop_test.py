@@ -279,7 +279,7 @@ def s_e_resume(S):
         t = time.time()
         while time.time() - t < 5 and not fd.State(st_r).records:
             time.sleep(0.1)
-        check(os.path.exists(os.path.join(out, ".big.bin.fdpart")), "hidden partial missing: %s" % os.listdir(out))
+        check(glob.glob(os.path.join(out, ".big.bin.*.fdpart")), "hidden partial missing: %s" % os.listdir(out))
         check(not os.path.exists(os.path.join(out, "big.bin")), "final file must not exist yet")
         check(len(fd.State(st_r).records) == 1, "resume record not saved")
         r = send(st_s, f, "--streams", "2")
@@ -403,6 +403,120 @@ def s_h_mac(S):
         rx.stop()
 
 
+def s_i_same_name(S):
+    """Two offered files with the same name (different folders) must both arrive, de-duplicated."""
+    src = tmp("i", "src")
+    fa = os.path.join(src, "a", "x.bin"); fb = os.path.join(src, "b", "x.bin")
+    size = 3 * (1 << 20) + 5
+    write(fa, os.urandom(size)); write(fb, os.urandom(size))     # same name AND same size
+    want = sorted([sha(fa), sha(fb)])
+
+    def got(out):
+        check(sorted(os.listdir(out)) == ["x (1).bin", "x.bin"], "unexpected names/leftovers: %s" % os.listdir(out))
+        return sorted(sha(os.path.join(out, n)) for n in os.listdir(out))
+
+    out = tmp("i", "out1")
+    rx = Recv("i1", tmp("i", "sr"), out, ["--accept", "everyone"])
+    try:
+        r = send(tmp("i", "ss"), fa, fb)
+        check("Done." in r.stdout, r.stdout)
+        check(got(out) == want, "py -> py: hashes differ")
+    finally:
+        rx.stop()
+    cli = mac_cli()
+    if not cli:
+        return "SKIP py->mac, fdtest->mac (mac CLI not built); py->py passed"
+    for label, sender in (("py", lambda: send(tmp("i", "ss2"), fa, fb)),
+                          ("fdtest", lambda: subprocess.run(fdtest_cmd("send", LOOP, fa, fb), stdout=subprocess.PIPE,
+                                                            stderr=subprocess.STDOUT, env=ENV, timeout=120,
+                                                            universal_newlines=True))):
+        out = tmp("i", "out_" + label)
+        mrx = Recv("i_" + label, None, out, extra_cmd=[cli, "recv", "--dir", out, "--state-dir", tmp("i", "msr_" + label),
+                                                       "--port", str(PORT), "--no-discovery", "--accept", "everyone"])
+        try:
+            r = sender()
+            check(r.returncode == 0, "%s -> mac failed:\n%s" % (label, r.stdout))
+            time.sleep(0.5)
+            check(got(out) == want, "%s -> mac: hashes differ" % label)
+        finally:
+            mrx.stop()
+
+
+def _accept_only(offer):
+    """Send an offer, return the accept reply, then drop the connection without sending data."""
+    s = socket.create_connection((LOOP, PORT), 10)
+    s.settimeout(30)
+    s.sendall(struct.pack(">i", fd.M_CTRL))
+    fd.send_json(s, offer)
+    r = fd.read_json(s)
+    s.close()
+    return r
+
+
+def s_j_hardening(S):
+    out, st_s, st_r = tmp("j", "out"), tmp("j", "ss"), tmp("j", "sr")
+    f = os.path.join(tmp("j", "src"), "big.bin")
+    size = 40 * (1 << 20)
+    write(f, os.urandom(size))
+    mt = int(os.stat(f).st_mtime * 1000)
+    # resume needs a positive mtime: an offer without one never gets "have"
+    rx = Recv("j1", st_r, out, ["--accept", "everyone"])
+    try:
+        send(st_s, f, "--streams", "1", "--stop-after-mb", "16", expect=3)
+        check(rx.wait_for("Transfer failed"), rx.text())
+        t = time.time()
+        while time.time() - t < 5 and not fd.State(st_r).records:
+            time.sleep(0.1)
+        me = fd.State(st_s)
+        base = {"v": 2, "dev": me.id, "ts": fd.now_ms(), "chunk": fd.CHUNK, "name": "tester", "type": "laptop"}
+        r = _accept_only(dict(base, id=str(uuid.uuid4()), files=[{"name": "big.bin", "size": size}]))
+        check(r["accept"] and "have" not in r, "no-mtime offer must start fresh: %r" % r)
+        time.sleep(0.5)
+        r = _accept_only(dict(base, id=str(uuid.uuid4()), files=[{"name": "big.bin", "size": size, "mtime": 0}]))
+        check(r["accept"] and "have" not in r, "mtime 0 must start fresh: %r" % r)
+        time.sleep(0.5)
+        r = _accept_only(dict(base, id=str(uuid.uuid4()), files=[{"name": "big.bin", "size": size, "mtime": mt}]))
+        check(r["accept"] and "have" in r, "positive mtime should resume: %r" % r)
+    finally:
+        rx.stop()
+    # state files are private (POSIX)
+    if os.name != "nt":
+        check(oct(os.stat(st_r).st_mode & 0o777) == "0o700", "state dir mode")
+        for n in os.listdir(st_r):
+            check(oct(os.stat(os.path.join(st_r, n)).st_mode & 0o777) == "0o600", "mode of %s" % n)
+    # replay cache survives a receiver restart; spoofed dev never gets "always trust"
+    st_r2, out2 = tmp("j", "sr2"), tmp("j", "out2")
+    g = os.path.join(tmp("j", "src"), "t.bin"); write(g, b"hi")
+    rx = Recv("j2", st_r2, out2, ["--accept", "ask"], stdin=True)
+    try:
+        rx.say("a"); send(st_s, g)
+    finally:
+        rx.stop()
+    me = fd.State(st_s)
+    rid = [k for k in me.keys][0]
+    key = bytes.fromhex(me.keys[rid]["key"])
+    before = dict(fd.State(st_r2).trusted)
+    sid = str(uuid.uuid4())
+    fl = [{"name": "r.txt", "size": 0, "mtime": 1}]
+    rx = Recv("j3", st_r2, out2, ["--accept", "trusted", "--non-interactive"])
+    try:
+        r, _ = raw_offer(fd.build_offer(sid, "tester", me.id, fl, key=key))
+        check(r["accept"], "valid auth should auto-accept")
+    finally:
+        rx.stop()
+    rx = Recv("j4", st_r2, out2, ["--accept", "trusted", "--non-interactive"])
+    try:
+        r, _ = raw_offer(fd.build_offer(sid, "tester", me.id, fl, key=key))
+        check(not r["accept"], "replay after restart must fall back to prompt: %r" % r)
+        r, _ = raw_offer(fd.build_offer(str(uuid.uuid4()), "tester", me.id, fl, key=None))
+        check(not r["accept"], r)
+        check("[y/N]" in rx.text() and "always trust" not in rx.text().split("Offer from")[-1],
+              "spoofed trusted dev must not be offered 'always trust':\n" + rx.text())
+        check(fd.State(st_r2).trusted == before, "trusted entry changed")
+    finally:
+        rx.stop()
+
+
 SCENARIOS = [
     ("a  py->py files, nested folder, 0-byte, SHA-256", s_a_files),
     ("b  text offers", s_b_text),
@@ -412,6 +526,8 @@ SCENARIOS = [
     ("f  CRC32 on, fallback, and corrupt frame", s_f_crc),
     ("g  protocol-1 compat both ways with fdtest.py", s_g_v1),
     ("h  py<->mac CLI (optional)", s_h_mac),
+    ("j  resume needs mtime, state file modes, persistent replay cache, no re-trust of known dev", s_j_hardening),
+    ("i  same-name files from different folders: py->py, py->mac, fdtest->mac", s_i_same_name),
 ]
 
 

@@ -34,4 +34,14 @@ import Testing
     }
 
     @Test func everythingInSelfTest() { #expect(SelfTest.failures().isEmpty) }
+
+    @Test func replayCachePersistsAndPrunes() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("fd-replay-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let a = Stores(dir: dir)
+        #expect(!a.replay.seen("s1"))
+        #expect(a.replay.seen("s1"))
+        #expect(Stores(dir: dir).replay.seen("s1"))      // survives a restart
+        #expect(!Stores(dir: dir).replay.seen("s1", now: Date().addingTimeInterval(25 * 3600)))   // pruned past 24 h
+    }
 }

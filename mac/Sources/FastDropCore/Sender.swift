@@ -11,7 +11,12 @@ public struct SendItem: Sendable, Hashable {
         self.url = url; self.name = name; self.size = size; self.mtime = mtime
     }
 
-    static func ms(_ d: Date?) -> Int64? { d.map { Int64($0.timeIntervalSince1970 * 1000) } }
+    /// nil when unknown (or not positive): the offer then omits `mtime` and the receiver never resumes that file.
+    static func ms(_ d: Date?) -> Int64? {
+        guard let d else { return nil }
+        let v = Int64(d.timeIntervalSince1970 * 1000)
+        return v > 0 ? v : nil
+    }
 
     /// Files stay as they are; folders become every regular file inside them, keeping the folder structure.
     public static func expand(_ urls: [URL]) -> [SendItem] {
@@ -115,7 +120,7 @@ public final class SendJob: @unchecked Sendable {
             var digestInput: [(name: String, size: Int64)] = []
             for it in items {
                 var f: [String: Any] = ["name": it.name, "size": it.size]
-                if let m = it.mtime { f["mtime"] = m }
+                if let m = it.mtime, m > 0 { f["mtime"] = m }
                 files.append(f)
                 digestInput.append((it.name, it.size))
             }

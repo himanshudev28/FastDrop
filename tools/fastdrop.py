@@ -37,6 +37,7 @@ CTRL_TIMEOUT = 15.0
 MAX_TEXT = 100000
 DAY_MS = 24 * 3600 * 1000
 RECORD_TTL_MS = 7 * DAY_MS
+REPLAY_MAX = 2000
 CAPS = ["text", "resume", "trust", "crc"]
 O_BINARY = getattr(os, "O_BINARY", 0)
 stop = threading.Event()
@@ -113,6 +114,11 @@ def resume_key(dev, name, size, mtime=None):
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
+def _mtime(v):
+    """A usable mtime is a positive integer; anything else means unknown (no resume for that file)."""
+    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else None
+
+
 def crc32(data, value=0):
     return zlib.crc32(data, value) & 0xFFFFFFFF
 
@@ -181,7 +187,10 @@ class State:
 
     def __init__(self, path=None, name=None):
         self.dir = os.path.abspath(path or default_state_dir())
-        os.makedirs(self.dir, exist_ok=True)
+        os.makedirs(self.dir, mode=0o700, exist_ok=True)
+        if os.name != "nt":
+            try: os.chmod(self.dir, 0o700)
+            except OSError: pass
         self.lock = threading.RLock()
         ident = self._load("identity.json", {})
         changed = False
@@ -199,7 +208,11 @@ class State:
 
     def _load(self, fn, default):
         try:
-            with open(os.path.join(self.dir, fn), "r", encoding="utf-8") as f:
+            p = os.path.join(self.dir, fn)
+            if os.name != "nt":
+                try: os.chmod(p, 0o600)     # best effort: tighten files made by older versions
+                except OSError: pass
+            with open(p, "r", encoding="utf-8") as f:
                 v = json.load(f)
             return v if isinstance(v, type(default)) else default
         except (OSError, ValueError):
@@ -208,7 +221,8 @@ class State:
     def _save(self, fn, obj):
         p = os.path.join(self.dir, fn)
         tmp = p + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | O_BINARY, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(obj, f, indent=1)
         os.replace(tmp, p)
 
@@ -223,6 +237,21 @@ class State:
     def save_records(self):
         with self.lock:
             self._save("resume.json", self.records)
+
+    def seen_session(self, sid):
+        """Persistent replay cache. True if this authenticated session id was already seen; else records it."""
+        with self.lock:
+            t = now_ms()
+            d = self._load("replay.json", {})
+            d = {k: v for k, v in d.items() if isinstance(v, int) and 0 <= t - v <= DAY_MS}
+            if sid in d:
+                return True
+            d[sid] = t
+            if len(d) > REPLAY_MAX:
+                d = dict(sorted(d.items(), key=lambda kv: kv[1])[-REPLAY_MAX:])
+            try: self._save("replay.json", d)
+            except OSError: pass
+            return False
 
     def info(self, port=PORT, receivable=True):
         return {"app": "fastdrop", "v": 2, "caps": CAPS, "id": self.id, "name": self.name,
@@ -507,7 +536,10 @@ def collect_files(paths):
 
 def _item(path, name):
     st = os.stat(path)
-    return {"path": path, "name": name, "size": st.st_size, "mtime": int(st.st_mtime * 1000)}
+    it = {"path": path, "name": name, "size": st.st_size}
+    if st.st_mtime > 0:
+        it["mtime"] = int(st.st_mtime * 1000)    # omitted when unknown: the receiver then never resumes this file
+    return it
 
 
 def build_offer(sid, name, dev, files, text=None, crc=False, key=None, ts=None, v2=True):
@@ -775,48 +807,89 @@ class Stdin:
 
 
 class Slot:
-    def __init__(self, raw_name, size, mtime, key, comps, base, v2):
+    def __init__(self, raw_name, size, mtime, key, comps, base, v2, idx=0, sid=""):
         self.raw, self.size, self.mtime, self.key = raw_name, size, mtime, key
         self.comps = comps
         self.rel = "/".join(comps)
         d = os.path.join(base, *comps[:-1]) if len(comps) > 1 else base
         self.dir = d
-        self.partial = os.path.join(d, "." + comps[-1] + ".fdpart")
+        # unique per file slot: two offered files named x.bin never share a partial
+        self.tag = key[:12] if key else (sid[:8] or "0")
+        self.partial = os.path.join(d, self.partial_name(self.tag, idx))
         self.nchunks = (size + CHUNK - 1) // CHUNK
         self.done = set()
         self.fd = None
-        self.lock = threading.Lock()
+        self.users = 0
+        self.complete = False
+        self.lock = threading.Lock()      # serialises seek+write where pwrite is missing
+        self.fdlock = threading.Lock()    # guards fd / users / complete
         self.v2 = v2
         self.final = None
 
-    def open(self, reuse=False):
+    def partial_name(self, tag, idx):
+        return ".%s.%s.%d.fdpart" % (self.comps[-1][:100], tag, idx)
+
+    def partial_belongs(self, p):
+        """True if p is a partial this slot's resume key could have produced (same dir, name, key tag)."""
+        if not self.key or not isinstance(p, str):
+            return False
+        b = os.path.basename(p)
+        return (os.path.normpath(os.path.dirname(p)) == os.path.normpath(self.dir)
+                and b.startswith("." + self.comps[-1][:100] + "." + self.key[:12] + ".") and b.endswith(".fdpart"))
+
+    def prepare(self, reuse=False):
+        """Create/size the partial file on disk without holding an fd (fds open lazily on first write)."""
         os.makedirs(self.dir, exist_ok=True)
         if not inside(os.path.dirname(self.partial), self.partial) or not inside(self.dir, self.partial):
             raise IOError("unsafe path")
         flags = os.O_RDWR | os.O_CREAT | O_BINARY
         if not reuse:
             flags |= os.O_TRUNC
-        self.fd = os.open(self.partial, flags, 0o644)
-        if os.fstat(self.fd).st_size != self.size:
-            os.ftruncate(self.fd, self.size)
+        fd = os.open(self.partial, flags, 0o644)
+        try:
+            if os.fstat(fd).st_size != self.size:
+                os.ftruncate(fd, self.size)
+        finally:
+            os.close(fd)
 
     def write(self, pos, mv):
-        if hasattr(os, "pwrite"):
-            w = 0
-            while w < len(mv):
-                w += os.pwrite(self.fd, mv[w:], pos + w)
-        else:
-            with self.lock:
-                os.lseek(self.fd, pos, os.SEEK_SET)
+        with self.fdlock:
+            if self.fd is None:
+                self.fd = os.open(self.partial, os.O_RDWR | O_BINARY)
+            self.users += 1
+            fd = self.fd
+        try:
+            if hasattr(os, "pwrite"):
                 w = 0
                 while w < len(mv):
-                    w += os.write(self.fd, mv[w:])
+                    w += os.pwrite(fd, mv[w:], pos + w)
+            else:
+                with self.lock:
+                    os.lseek(fd, pos, os.SEEK_SET)
+                    w = 0
+                    while w < len(mv):
+                        w += os.write(fd, mv[w:])
+        finally:
+            with self.fdlock:
+                self.users -= 1
+                if self.complete and self.users == 0:
+                    self._close_locked()
 
-    def close(self):
+    def mark_complete(self):
+        with self.fdlock:
+            self.complete = True
+            if self.users == 0:
+                self._close_locked()
+
+    def _close_locked(self):
         if self.fd is not None:
             try: os.close(self.fd)
             except OSError: pass
             self.fd = None
+
+    def close(self):
+        with self.fdlock:
+            self._close_locked()
 
 
 class Session:
@@ -846,8 +919,6 @@ class Receiver:
         self.sessions = {}
         self.slock = threading.Lock()
         self.busy = False
-        self.replay = {}
-        self.rlock = threading.Lock()
         os.makedirs(self.dir, exist_ok=True)
         self.prune()
 
@@ -871,16 +942,18 @@ class Receiver:
 
     def save_records(self, s, final=False):
         st = self.state
+        with s.lock:    # data threads add to sl.done under s.lock: snapshot before iterating
+            snaps = [set(sl.done) for sl in s.slots]
         with st.lock:
-            for sl in s.slots:
-                if sl.size == 0 or not s.v2:
+            for sl, done in zip(s.slots, snaps):
+                if sl.size == 0 or not s.v2 or not sl.key:
                     continue
-                if sl.final or not sl.done or len(sl.done) >= sl.nchunks:
-                    if sl.key in st.records and (sl.final or len(sl.done) >= sl.nchunks):
+                if sl.final or not done or len(done) >= sl.nchunks:
+                    if sl.key in st.records and (sl.final or len(done) >= sl.nchunks):
                         del st.records[sl.key]
                     continue
                 st.records[sl.key] = {"key": sl.key, "partial": sl.partial, "name": sl.rel, "size": sl.size,
-                                      "chunks": chunks_to_ranges(sl.done), "updated": now_ms()}
+                                      "chunks": chunks_to_ranges(done), "updated": now_ms()}
             st.save_records()
 
     # --- network
@@ -930,7 +1003,7 @@ class Receiver:
             self.state.trusted = self.state._load("trusted.json", {})
         rec = self.state.trusted.get(dev) if dev else None
         auth, ts = o.get("auth"), o.get("ts")
-        if not rec or not isinstance(auth, str) or not isinstance(ts, int):
+        if not rec or not isinstance(auth, str) or not isinstance(ts, int) or isinstance(ts, bool):
             return False
         if abs(now_ms() - ts) > DAY_MS:
             return False
@@ -939,16 +1012,9 @@ class Receiver:
         exp = auth_hmac(key, canonical_string(o["id"], dev, ts, files_digest(names, text)))
         if not hmac.compare_digest(exp, auth.lower()):
             return False
-        with self.rlock:
-            t = now_ms()
-            for k in [k for k, v in self.replay.items() if t - v > DAY_MS]:
-                del self.replay[k]
-            if o["id"] in self.replay:
-                return False
-            self.replay[o["id"]] = t
-        return True
+        return not self.state.seen_session(str(o["id"]))
 
-    def prompt(self, sender, ip, names, total, code, text, trusted):
+    def prompt(self, sender, ip, names, total, code, text, trusted, allow_always=True):
         print("\nOffer from '%s' (%s)%s" % (sender, ip, "  [trusted device]" if trusted else ""))
         if text is not None:
             shown = text if len(text) <= 300 else text[:300] + "..."
@@ -960,13 +1026,18 @@ class Receiver:
             if len(names) > 10:
                 print("   ... and %d more" % (len(names) - 10))
         print("   Confirmation code: %s  (should match the sender's screen)" % code)
+        opts = "[y/N/a=accept and always trust]" if allow_always else "[y/N]"
+        if not allow_always:
+            print("   (this device id is already trusted but the offer was not authenticated; remove it with"
+                  " 'trust remove' first to re-pair)")
         if self.non_interactive:
-            print("Accept? [y/N/a=accept and always trust] (non-interactive: declined)", flush=True)
+            print("Accept? %s (non-interactive: declined)" % opts, flush=True)
             return "n"
-        print("Accept? [y/N/a=accept and always trust] ", end="", flush=True)
+        print("Accept? %s " % opts, end="", flush=True)
         ans = Stdin.answer(120)
         print(ans or "(no answer)", flush=True)
-        return ans[:1]
+        a1 = ans[:1]
+        return "y" if a1 == "a" and not allow_always else a1
 
     def offer(self, c, addr):
         o = read_json(c)
@@ -981,7 +1052,7 @@ class Receiver:
 
         text = o.get("text") if v2 else None
         try:
-            raw = [(str(f["name"]), int(f["size"]), f.get("mtime") if v2 else None) for f in (o.get("files") or [])]
+            raw = [(str(f["name"]), int(f["size"]), _mtime(f.get("mtime")) if v2 else None) for f in (o.get("files") or [])]
         except (KeyError, TypeError, ValueError):
             return refuse("invalid")
         if (text is not None and (not isinstance(text, str) or len(text) > MAX_TEXT)) or any(sz < 0 for _, sz, _ in raw) \
@@ -997,25 +1068,31 @@ class Receiver:
         s = None
         try:
             trusted = v2 and self.check_trust(o, dev, names, text)
+            with self.state.lock:
+                known = bool(v2 and dev in self.state.trusted)   # never replace an existing key from an offer
             code = confirmation_code(sid)
             auto = self.mode == "everyone" or (self.mode == "trusted" and trusted)
             always = False
             if auto:
                 print("\nOffer from '%s' (%s): auto-accepted (%s)" % (sender, addr[0], "trusted device" if trusted else "accept=everyone"))
             else:
-                ans = self.prompt(sender, addr[0], names, total, code, text, trusted)
+                ans = self.prompt(sender, addr[0], names, total, code, text, trusted, allow_always=not known)
                 if ans not in ("y", "a"):
                     return refuse("declined")
-                always = ans == "a" and v2
+                always = ans == "a" and v2 and not known
             reply = {"accept": True, "reason": ""}
             reply.update(base_reply)
             if always:
                 key = os.urandom(32)
                 with self.state.lock:
-                    self.state.trusted[dev] = {"name": sender, "key": key.hex(), "added": now_ms()}
-                    self.state.save_trusted()
-                reply["trust"] = key.hex()
-                print("Trusting '%s' (%s) from now on." % (sender, dev))
+                    if dev in self.state.trusted:
+                        always = False
+                    else:
+                        self.state.trusted[dev] = {"name": sender, "key": key.hex(), "added": now_ms()}
+                        self.state.save_trusted()
+                if always:
+                    reply["trust"] = key.hex()
+                    print("Trusting '%s' (%s) from now on." % (sender, dev))
             if text is not None:
                 print("Text from '%s':\n%s" % (sender, text), flush=True)
                 try:
@@ -1032,29 +1109,42 @@ class Receiver:
             if crc:
                 reply["crc"] = True
             slots = []
-            for rn, sz, mt in raw:
+            seen_keys = set()
+            for i, (rn, sz, mt) in enumerate(raw):
                 comps = safe_components(rn)
-                key = resume_key(dev, rn, sz, mt) if v2 and o.get("chunk", CHUNK) == CHUNK else None
-                slots.append(Slot(rn, sz, mt, key, comps, self.dir, v2))
+                # resume needs a known, positive mtime: without it two versions of a same-size file could be spliced
+                key = resume_key(dev, rn, sz, mt) if v2 and o.get("chunk", CHUNK) == CHUNK and mt else None
+                if key in seen_keys:
+                    key = None
+                if key:
+                    seen_keys.add(key)
+                slots.append(Slot(rn, sz, mt, key, comps, self.dir, v2, i, sid))
             s = Session(sid, dev, v2, slots, crc)
             have = {}
+            used = set()
             for i, sl in enumerate(slots):
                 if sl.size == 0:
                     continue
                 rec = self.state.records.get(sl.key) if sl.key else None
                 reuse = False
-                if rec and rec.get("partial") == sl.partial and rec.get("size") == sl.size and os.path.isfile(sl.partial) \
-                        and os.path.getsize(sl.partial) == sl.size:
+                if rec and rec.get("key") == sl.key and sl.partial_belongs(rec.get("partial")) \
+                        and rec["partial"] not in used and rec.get("size") == sl.size \
+                        and os.path.isfile(rec["partial"]) and os.path.getsize(rec["partial"]) == sl.size:
                     ch = set()
                     for a0, b0 in merge_ranges(rec.get("chunks", [])):
                         ch.update(range(max(0, a0), min(sl.nchunks, b0)))
                     if ch:
+                        sl.partial = rec["partial"]
                         sl.done = ch
                         reuse = True
                         have[str(i)] = chunks_to_ranges(ch)
                         s.verified += sum(chunk_len(sl.size, k) for k in ch)
                         s.progress = s.verified
-                sl.open(reuse)
+                if not reuse and rec and sl.partial_belongs(rec.get("partial")) and rec["partial"] != sl.partial:
+                    try: os.unlink(rec["partial"])      # stale partial from an earlier offer of this file
+                    except OSError: pass
+                used.add(sl.partial)
+                sl.prepare(reuse)
             if have:
                 reply["have"] = have
                 print("Resuming: %s already present" % fmt_bytes(s.verified))
@@ -1189,8 +1279,11 @@ class Receiver:
                     s.verified += ln
                     if aligned:
                         sl.done.add(ci)
+                    fdone = len(sl.done) >= sl.nchunks
                     if s.verified >= s.total:
                         s.done.set()
+                if fdone:
+                    sl.mark_complete()      # release the fd as soon as the file is complete
         except Exception as e:
             if not s.done.is_set() and not s.failed:
                 s.failed = "data stream error: %r" % (e,)

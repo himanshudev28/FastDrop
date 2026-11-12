@@ -118,9 +118,14 @@ auth        = hex(HMAC-SHA256(key, UTF-8(canonical)))          // lowercase hex
 The receiver treats the offer as **trusted** only if all of these hold:
 - `trusted[dev]` exists and `auth` matches (compared in constant time),
 - `|now − ts| ≤ 24 h`,
-- this `id` hasn't been seen in an authenticated offer in the last 24 h (in-memory replay cache).
+- this `id` hasn't been seen in an authenticated offer in the last 24 h. The replay cache is
+  **persisted** in the receiver's state folder (session id + time, capped at about 2000 entries,
+  entries older than 24 h pruned), so restarting the receiver doesn't let a captured offer be replayed.
 
-Otherwise the offer is treated as untrusted: a normal prompt, never an error. A sender whose key
+Otherwise the offer is treated as untrusted: a normal prompt, never an error. If `trusted[dev]`
+already exists but the offer's auth is missing or invalid (someone may be spoofing `dev`), the prompt
+**must not offer "always trust"**, and an offer never overwrites an existing trusted entry: the user
+removes the device first to re-pair. A sender whose key
 was revoked just sees the prompt again, and can be re-trusted, which issues a new key.
 
 **Auto-accept setting** (replaces the old on/off switch):
@@ -138,6 +143,14 @@ Settings lists trusted devices (name, date added) with a Remove action.
 
 Used only when the offer has `"v": 2`, `"dev"`, and `"chunk": 8388608`.
 
+**Resume needs `mtime`.** The receiver offers `have` / resume only for files whose offer entry has
+a positive `mtime`. A file without one (missing, 0 or negative) always starts fresh and keeps no
+resume record. Senders therefore omit `mtime` when they don't know it. Reason: without an mtime
+the resumeKey only covers name and size, so an edited file of the same size would match the old
+partial and the receiver would splice two versions of the file into one corrupt result. (The
+resumeKey formula and its test vectors are unchanged; the "no mtime" vector remains for the hash
+itself.)
+
 **Receiver bookkeeping.** For each incoming file:
 
 ```
@@ -152,6 +165,11 @@ Record ranges are half-open chunk-index intervals `[start, end)`, sorted and mer
   with at least one done chunk **keep their partial file**, and their record is saved. The
   receiver also checkpoints records about every 10 s while a transfer runs, so a killed app can
   still resume.
+- Each file slot gets its **own partial name**, so two offered files with the same name (for
+  example `a/x.bin` and `b/x.bin` flattened to `x.bin`) or two senders never share one partial.
+  Recommended form: `.<name>.<resumeKey[:12] or sessionId[:8]>.<slotIndex>.fdpart`. The record stores
+  the exact partial path, and before reuse the receiver checks that the partial belongs to that
+  key (same folder, same name, key tag). Final names are de-duplicated (`x.bin`, `x (1).bin`).
 - Partials stay invisible as finished files: Android keeps the MediaStore row `IS_PENDING = 1`
   (or a hidden temp file before Android 10), and the Mac writes to a hidden partial file that is
   renamed when complete.

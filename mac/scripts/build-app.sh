@@ -8,14 +8,28 @@ cd "$(dirname "$0")/.."
 APP=build/FastDrop.app
 IDENTITY="${FASTDROP_SIGN_IDENTITY:-FastDrop Dev}"
 
-echo "▸ Compiling (release)…"
-swift build -c release --product FastDrop
-BIN=$(swift build -c release --show-bin-path)
+# Universal binary (Apple silicon + Intel): one release build per architecture, joined with lipo. This works
+# with just the Command Line Tools too (a single "--arch arm64 --arch x86_64" build needs Xcode's xcbuild).
+# FASTDROP_ARCHS="arm64" makes a single-architecture build.
+ARCHS="${FASTDROP_ARCHS:-arm64 x86_64}"
+SLICES=()
+for arch in $ARCHS; do
+    echo "▸ Compiling (release, $arch)…"
+    swift build -c release --product FastDrop --triple "$arch-apple-macosx"
+    SLICES+=("$(swift build -c release --triple "$arch-apple-macosx" --show-bin-path)/FastDrop")
+done
+mkdir -p build
+if [[ ${#SLICES[@]} -gt 1 ]]; then
+    lipo -create "${SLICES[@]}" -output build/FastDrop.bin
+else
+    cp "${SLICES[0]}" build/FastDrop.bin
+fi
+echo "  architectures: $(lipo -archs build/FastDrop.bin)"
 
 echo "▸ Assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN/FastDrop" "$APP/Contents/MacOS/"
+cp build/FastDrop.bin "$APP/Contents/MacOS/FastDrop"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 
 if [[ ! -f build/AppIcon.icns || scripts/make-icon.swift -nt build/AppIcon.icns ]]; then
