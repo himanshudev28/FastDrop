@@ -617,8 +617,7 @@ class HomeScreen(host: MainActivity) : Screen(host) {
             val meta = if (d.via == Device.VIA_P2P) s(R.string.meta_type_ip, kindLabel(d.type), Links.linkLabel(d.via))
             else s(R.string.meta_type_ip, kindLabel(d.type), d.ip)
             val row = Ui.portRow(c, i + 1, d, meta, tags) {
-                if (Hub.transfer?.running == true || Hub.pendingSendTo != null) host.toast(s(R.string.busy_wait))
-                else host.sendTo(d)
+                host.sendTo(d)          // queues behind a running transfer (Sender.sendMany)
             }
             row.tag = d.id
             row.contentDescription = "${d.name}, ${kindLabel(d.type)}, ${tags.joinToString(", ")}"

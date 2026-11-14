@@ -388,6 +388,7 @@ class RxSession(
             return
         }
         synchronized(recLock) { keys[i]?.let { Resume.remove(it) } }
+        t.finishedFiles.add(i)
         Hub.addReceived(Received(files[i].name, files[i].size, uri, t.peer, files[i].app))
         if (t.histFiles.size < HistoryCodec.MAX_NAMES)                          // history hook
             t.histFiles.add(HFile(files[i].name, files[i].size, uri?.toString(),

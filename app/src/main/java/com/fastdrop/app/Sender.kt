@@ -28,20 +28,48 @@ object Sender {
 
     private fun str(id: Int, vararg a: Any): String = Hub.app.getString(id, *a)
 
-    /** Sends [items], or [text] (a text / link offer with no files) when it is non-null. */
-    fun send(ctx: Context, dev: Device, items: List<SendItem>, text: String? = null) {
-        if (items.isEmpty() && text.isNullOrEmpty()) return
-        if (!Hub.tryReserve()) { Hub.message(str(R.string.msg_transfer_running)); return }
-        queueAborted = false
-        thread(name = "sender") { run(ctx, dev, items, text) }
+    /** A send that asked while another transfer was running; it starts when FastDrop is free again. */
+    private class Queued(val ctx: Context, val devs: List<Device>, val items: List<SendItem>, val text: String?)
+    private val waiting = java.util.concurrent.ConcurrentLinkedDeque<Queued>()
+    /** A multi-device send owns the gaps between its transfers; the queue waits for all of it. */
+    @Volatile private var multiActive = false
+
+    /** Sends waiting their turn (shown on the transfer sheet). */
+    val queued: Int get() = waiting.size
+
+    fun clearQueue() { waiting.clear(); Hub.changed() }
+
+    /** Starts the next queued send if nothing is running. Called on the main thread when FastDrop frees up. */
+    fun drain() {
+        if (multiActive || !Hub.canReserve()) return
+        val q = waiting.poll() ?: return
+        Hub.changed()
+        if (!start(q.ctx, q.devs, q.items, q.text)) waiting.addFirst(q)     // lost the slot: stay first in line
     }
+
+    private fun enqueue(ctx: Context, devs: List<Device>, items: List<SendItem>, text: String?) {
+        waiting.add(Queued(ctx.applicationContext, devs, items, text))
+        val who = if (devs.size == 1) devs[0].name else ctx.resources.getQuantityString(R.plurals.msg_n_devices, devs.size, devs.size)
+        Hub.message(str(R.string.msg_queued, who))
+        Hub.changed()
+    }
+
+    /** Sends [items], or [text] (a text / link offer with no files) when it is non-null. Queues when busy. */
+    fun send(ctx: Context, dev: Device, items: List<SendItem>, text: String? = null) = sendMany(ctx, listOf(dev), items, text)
 
     /** One normal transfer per device, one after another, then a summary toast ("Sent to 2 of 3 devices"). */
     fun sendMany(ctx: Context, devs: List<Device>, items: List<SendItem>, text: String? = null) {
-        if (devs.size == 1) { send(ctx, devs[0], items, text); return }
         if (devs.isEmpty() || (items.isEmpty() && text.isNullOrEmpty())) return
-        if (!Hub.tryReserve()) { Hub.message(str(R.string.msg_transfer_running)); return }
+        // Something else is running (or already waiting): wait in line instead of refusing.
+        if (waiting.isNotEmpty() || multiActive || !start(ctx, devs, items, text)) enqueue(ctx, devs, items, text)
+    }
+
+    /** Takes the transfer slot and starts; false if something else holds it. */
+    private fun start(ctx: Context, devs: List<Device>, items: List<SendItem>, text: String?): Boolean {
+        if (!Hub.tryReserve()) return false
         queueAborted = false
+        if (devs.size == 1) { thread(name = "sender") { run(ctx, devs[0], items, text) }; return true }
+        multiActive = true
         thread(name = "sender-multi") {
             var ok = 0
             var busy = 0
@@ -60,10 +88,13 @@ object Sender {
                 }
             } finally {
                 Hub.multiInfo = null
+                multiActive = false
                 Hub.changed()
+                Hub.main.post { drain() }
             }
             Hub.message(if (busy > 0) str(R.string.msg_sent_to_n_of_busy, ok, devs.size, busy) else str(R.string.msg_sent_to_n_of, ok, devs.size))
         }
+        return true
     }
 
     /** Re-reads each item's real size just before sending; drops items that can no longer be opened. */
@@ -82,6 +113,8 @@ object Sender {
 
     /** Returns true when the receiver confirmed everything. */
     private fun run(ctx: Context, dev: Device, picked: List<SendItem>, text: String?): Boolean {
+        // What this send is moving, for the "Connecting / Waiting to accept" sheet and Retry.
+        Hub.sentItems = picked; Hub.sentText = text; Hub.sentDevs = listOf(dev)
         val items = revalidate(ctx, picked)
         if (items.isEmpty() && text == null) {
             Hub.message(str(R.string.msg_cant_read_selected))
@@ -186,6 +219,8 @@ object Sender {
             val total = if (text != null) text.toByteArray(Charsets.UTF_8).size.toLong() else items.sumOf { it.size }
             val tr = Transfer(true, dev.name, total, items.size, Net.viaFor(ctrl.localAddress),
                 if (text != null) listOf(str(R.string.main_label_text)) else items.take(50).map { it.name }, text)
+            tr.items = picked                                                        // Retry resends exactly this
+            tr.target = dev
             tr.baseline = baseline
             tr.peerId = dev.id                                                       // history hook
             items.take(HistoryCodec.MAX_NAMES).forEach { tr.histFiles.add(HistoryStore.fileOf(it)) }
@@ -201,15 +236,20 @@ object Sender {
             Hub.begin(tr)
 
             val queue = ConcurrentLinkedQueue<Chunk>()
+            val left = java.util.concurrent.atomic.AtomicLongArray(items.size)
             items.forEachIndexed { i, it ->
                 var off = 0L
+                var todo = 0L
                 val got = have[i]
                 while (off < it.size) {
                     val len = minOf(Proto.CHUNK.toLong(), it.size - off).toInt()
-                    if (got == null || !ProtoV2.Ranges.contains(got, (off / Proto.CHUNK).toInt())) queue.add(Chunk(i, off, len))
+                    if (got == null || !ProtoV2.Ranges.contains(got, (off / Proto.CHUNK).toInt())) { queue.add(Chunk(i, off, len)); todo += len }
                     off += len
                 }
+                left.set(i, todo)
+                if (todo == 0L) tr.finishedFiles.add(i)          // empty, or already on the receiver (resume)
             }
+            tr.fileLeft = left
             val n = minOf(Hub.streams.coerceIn(1, 8), queue.size)
             val error = AtomicReference<Exception?>()
             val workers = (0 until n).map {
@@ -243,13 +283,14 @@ object Sender {
             Hub.linking = false
             Hub.pendingThread = null
             Hub.pendingCode = null
-            if (t == null) Hub.release()
+            if (t == null) Hub.release(drain = false)
             Hub.pendingSendTo = null
             Hub.pendingSocket = null
             Hub.pendingStatus = null
             Io.closeQuietly(ctrl)
             if (t == null) try { Links.onTransferEnded() } catch (_: Exception) { }   // nothing was sent: let go of the link
             Hub.changed()
+            Hub.main.post { drain() }                 // only now: the next queued send may start
         }
         return success
     }
@@ -305,6 +346,7 @@ object Sender {
                     val tail = ByteBuffer.allocate(4)
                     tail.putInt(crc.value.toInt()).flip()
                     Io.writeFully(ch, tail)
+                    t.chunkSent(c.file, c.len.toLong())
                     continue
                 }
                 while (rem > 0) {
@@ -322,6 +364,7 @@ object Sender {
                     pos += n; rem -= n
                     t.add(n)
                 }
+                t.chunkSent(c.file, c.len.toLong())
             }
             if (!t.running) throw IOException("stopped")
             hdr.clear(); hdr.putInt(-1).putLong(0).putInt(0).flip()

@@ -41,6 +41,7 @@
     <string name="progress_of">%1$s of %2$s</string>
     <string name="eta_left">%1$s left</string>
     <string name="resumed_at">Resumed at %1$d %%</string>
+    <string name="transfer_file_of">File %1$d of %2$d</string>
     <string name="title_sent">Sent to %1$s</string>
     <string name="title_sent_text">Sent text to %1$s</string>
     <plurals name="title_saved">
@@ -141,7 +142,6 @@
     <string name="strip_connecting">Connecting to %1$s…</string>
     <string name="strip_meta">%1$d %% · %2$s</string>
     <string name="strip_meta_noeta">%1$d %%</string>
-    <string name="busy_wait">Wait for the current transfer to finish</string>
     <string name="main_label_text">Text</string>
     <string name="main_copied">%1$s copied</string>
     <string name="main_cant_copy">Couldn\'t copy</string>
@@ -187,7 +187,16 @@
         <item quantity="other">Preparing %1$d items…</item>
     </plurals>
     <string name="main_cant_read_files">Couldn\'t read those files</string>
-    <string name="msg_transfer_running">A transfer is already running</string>
+    <string name="msg_queued">Queued: sends to %1$s after the current transfer</string>
+    <plurals name="msg_n_devices">
+        <item quantity="one">%1$d device</item>
+        <item quantity="other">%1$d devices</item>
+    </plurals>
+    <plurals name="queued_n">
+        <item quantity="one">%1$d queued</item>
+        <item quantity="other">%1$d queued</item>
+    </plurals>
+    <string name="action_clear_queue">Clear queue</string>
     <string name="msg_device_n_of">Device %1$d of %2$d</string>
     <string name="msg_sent_to_n_of">Sent to %1$d of %2$d devices</string>
     <string name="msg_sent_to_n_of_busy">Sent to %1$d of %2$d devices (%3$d skipped: busy)</string>

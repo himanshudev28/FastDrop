@@ -105,6 +105,19 @@ class Transfer(
     // --- history hooks (HistoryStore): peer's device id when known, and per-file info for the entry
     @Volatile var peerId: String? = null
     val histFiles = CopyOnWriteArrayList<HFile>()
+    /** Indexes of files fully moved (sender: every chunk written; receiver: saved). For "File 3 of 12". */
+    val finishedFiles: MutableSet<Int> = java.util.Collections.newSetFromMap(ConcurrentHashMap<Int, Boolean>())
+    /** Outgoing only: exactly what this send moves and where, for Retry. */
+    @Volatile var items: List<SendItem> = emptyList()
+    @Volatile var target: Device? = null
+    /** Sender only: bytes still to send per file; the chunk that takes one to 0 marks it finished. */
+    @Volatile var fileLeft: java.util.concurrent.atomic.AtomicLongArray? = null
+
+    /** Once per finished chunk (not per write), so it costs nothing measurable. */
+    fun chunkSent(file: Int, len: Long) {
+        val left = fileLeft ?: return
+        if (left.addAndGet(file, -len) <= 0L) finishedFiles.add(file)
+    }
     private val closeables = CopyOnWriteArrayList<Closeable>()
 
     fun add(n: Long) { done.addAndGet(n); lastProgressAt = SystemClock.elapsedRealtime() }
@@ -341,7 +354,10 @@ object Hub {
 
     // ---- transfer lifecycle ----
     fun tryReserve() = busy.compareAndSet(false, true)
-    fun release() { busy.set(false) }
+    /** Frees the transfer slot. [drain]: let a queued send start (the sender passes false and drains itself after its cleanup). */
+    fun release(drain: Boolean = true) { busy.set(false); if (drain) main.post { Sender.drain() } }
+    /** Nothing holds the transfer slot right now (a queued send may start). */
+    fun canReserve() = !busy.get()
 
     fun begin(t: Transfer) {
         transfer = t
@@ -355,6 +371,9 @@ object Hub {
         t.closeAll()
         releaseLocks()
         busy.set(false)
+        // Incoming: a queued send may go now. Outgoing: Sender.run drains once its own cleanup is done,
+        // so that cleanup can't clear the next send's pending state.
+        if (!t.outgoing) main.post { Sender.drain() }
         try { HistoryStore.record(t) } catch (_: Exception) { }      // history hook
         changed()
         TransferService.update(this.app, statusLine(t))

@@ -427,9 +427,6 @@ class MainActivity : Activity(), Hub.Listener {
         val text = Hub.selectionText?.takeIf { it.isNotEmpty() }
         val sel = if (text != null) emptyList() else Hub.selection
         if (sel.isEmpty() && text == null) return
-        Hub.sentItems = sel
-        Hub.sentText = text
-        Hub.sentDevs = devs
         // Sent from outside "Send to" (Direct Share, Retry, Send back): nothing on screen holds this
         // selection, so drop it now or Home "Send" would offer the same files again later.
         if (current !is SendScreen) { Hub.selection = emptyList(); Hub.selectionText = null }

@@ -140,6 +140,9 @@ class TransferUi(private val host: MainActivity) {
             visibility = View.GONE
         }
         private val listBox = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        /** Tick per listed file row, by file index; shown once that file is finished. */
+        private val rowTicks = ArrayList<View>()
+        private var tickFor: Transfer? = null
         private val extras = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             val g = Ui.gutter(ctx)
@@ -244,7 +247,7 @@ class TransferUi(private val host: MainActivity) {
 
             when (newMode) {
                 Mode.PENDING -> {
-                    if (modeChanged || keyChanged) buildActions(newMode, t)
+                    if (modeChanged || keyChanged || Sender.queued != actionsQueued) buildActions(newMode, t)
                     panel.setJob(Job.SEND)
                     panel.setBang(false)
                     val who = pending ?: str(R.string.device_generic)
@@ -267,13 +270,13 @@ class TransferUi(private val host: MainActivity) {
                         panel.layout(readoutOn = false, meterOn = false, codeOn = false, waitOn = true)
                         setIf(panel.codeHelp, Hub.pendingStatus ?: str(R.string.status_waiting_accept))
                     }
-                    setIf(panel.meta, listOfNotNull(Hub.multiInfo, what.ifEmpty { null }).joinToString(" · "))
+                    setIf(panel.meta, listOfNotNull(Hub.multiInfo, what.ifEmpty { null }, queuedNote()).joinToString(" · "))
                     setIf(panel.note, "")
                     setIf(panel.body, "")
                 }
                 Mode.RUN -> {
                     if (t == null) return
-                    if (modeChanged || keyChanged) buildActions(newMode, t)
+                    if (modeChanged || keyChanged || Sender.queued != actionsQueued) buildActions(newMode, t)
                     val job = if (t.outgoing) Job.SEND else Job.RECEIVE
                     panel.setJob(job)
                     panel.setBang(false)
@@ -293,7 +296,10 @@ class TransferUi(private val host: MainActivity) {
                     setIf(panel.meta, str(R.string.progress_of, Io.bytes(done), Io.bytes(t.total)) +
                         (if (eta != null) " · " + str(R.string.eta_left, eta) else ""))
                     val resumed = if (t.resumed) str(R.string.resumed_at, (base * 100).toInt().coerceAtLeast(0)) else null
-                    setIf(panel.note, listOfNotNull(Hub.multiInfo, resumed).joinToString(" · "))
+                    val fileOf = if (t.files > 1 && t.text == null)
+                        str(R.string.transfer_file_of, (t.finishedFiles.size + 1).coerceAtMost(t.files), t.files) else null
+                    setIf(panel.note, listOfNotNull(Hub.multiInfo, fileOf, resumed, queuedNote()).joinToString(" · "))
+                    showTicks(t)
                     setIf(panel.body, "")
                     // Decide once, 5 s in, so the hint doesn't flicker.
                     if (!tipChecked && SystemClock.elapsedRealtime() - t.startedAt > 5_000 && speed > 1) {
@@ -324,6 +330,7 @@ class TransferUi(private val host: MainActivity) {
                         else -> ctx.resources.getQuantityString(R.plurals.title_saved, t.files, t.files)
                     })
                     setIf(panel.meta, str(R.string.done_in, Io.bytes(moved), Io.duration(ms / 1000)))
+                    showTicks(t)
                     setIf(panel.note, ""); setIf(panel.body, "")
                     panel.hide.visibility = View.GONE
                     tip.visibility = View.GONE
@@ -361,6 +368,7 @@ class TransferUi(private val host: MainActivity) {
                         val canResume = t.outgoing && t.text == null && frac > 0.01f
                         setIf(panel.note, if (canResume) str(R.string.retry_continues, (frac * 100).toInt()) else "")
                     }
+                    showTicks(t)
                 }
                 Mode.NONE -> {}
             }
@@ -417,13 +425,36 @@ class TransferUi(private val host: MainActivity) {
             return shownSpeed
         }
 
+        /** "2 queued": sends waiting for this transfer to end. */
+        private fun queuedNote(): String? = Sender.queued.takeIf { it > 0 }?.let {
+            ctx.resources.getQuantityString(R.plurals.queued_n, it, it)
+        }
+
+        /** Queue size the action row was built for (it gains "Clear queue" while sends wait). */
+        private var actionsQueued = 0
+
+        /** Ticks the listed files that are finished (all of them once the transfer is done). */
+        private fun showTicks(t: Transfer) {
+            if (t !== tickFor) return
+            val all = t.state == State.DONE
+            for ((i, v) in rowTicks.withIndex()) {
+                val on = all || i in t.finishedFiles
+                val want = if (on) View.VISIBLE else View.INVISIBLE
+                if (v.visibility != want) v.visibility = want
+            }
+        }
+
         /** The file rows under the panel: names (sizes when known), first few only. */
         private fun bindNames(t: Transfer?) {
             listBox.removeAllViews()
+            rowTicks.clear()
+            tickFor = t
             val list = t?.names?.takeIf { it.isNotEmpty() } ?: Hub.sentItems.map { it.name }
             if (list.isEmpty()) return
             val sizes = HashMap<String, Long>()
-            for (s in Hub.sentItems) sizes[s.name] = s.size
+            // Sizes are known for our own sends only (incoming rows must not borrow an unrelated send's).
+            val known = when { t == null -> Hub.sentItems; t.outgoing -> t.items; else -> emptyList() }
+            for (s in known) sizes[s.name] = s.size
             val shown = list.take(5)
             val g = Ui.gutter(ctx)
             shown.forEach { n ->
@@ -446,6 +477,11 @@ class TransferUi(private val host: MainActivity) {
                 }, LinearLayout.LayoutParams(0, -2, 1f))
                 sizes[n]?.let {
                     row.addView(Ui.mono(ctx, Io.bytes(it)), LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(12) })
+                }
+                if (t != null && t.text == null) {
+                    val tick = Ui.icon(ctx, R.drawable.ic_check, Theme.TXT_OK, 18).apply { visibility = View.INVISIBLE }
+                    row.addView(tick, LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginStart = dp(12) })
+                    rowTicks.add(tick)
                 }
                 listBox.addView(row, LinearLayout.LayoutParams(-1, -2))
             }
@@ -499,6 +535,7 @@ class TransferUi(private val host: MainActivity) {
         }
 
         private fun buildActions(m: Mode, t: Transfer?) {
+            actionsQueued = Sender.queued
             actions.removeAllViews()
             extras.removeAllViews()
             extras.visibility = View.GONE
@@ -514,6 +551,7 @@ class TransferUi(private val host: MainActivity) {
                     }
                     add(cancel, true)
                     focus = cancel
+                    if (Sender.queued > 0) add(Ui.quietButton(ctx, str(R.string.action_clear_queue), danger = true) { Sender.clearQueue() }, false)
                 }
                 Mode.DONE -> {
                     val ig = installGroup
@@ -549,14 +587,14 @@ class TransferUi(private val host: MainActivity) {
                 Mode.FAIL -> {
                     val cancelled = t?.state == State.CANCELLED
                     val dev = if (t != null && t.outgoing && !cancelled)
-                        (t.peerId?.let { Hub.devices[it] } ?: Hub.devices.values.firstOrNull { it.name == t.peer } ?: snapDev
+                        (t.target?.let { tg -> Hub.devices[tg.id] ?: tg } ?: t.peerId?.let { Hub.devices[it] } ?: Hub.devices.values.firstOrNull { it.name == t.peer } ?: snapDev
                             ?: Hub.sentDevs.firstOrNull { it.id == t.peerId } ?: Hub.sentDevs.firstOrNull { it.name == t.peer }) else null
                     val close = Ui.secondaryButton(ctx, str(if (cancelled) R.string.action_done else R.string.action_close)) { finishWith(t) }
                     add(close, true)
                     focus = close
                     // Retry resends what was sent, not whatever is selected now.
                     val text = t?.text ?: snapText
-                    val items = if (text != null) emptyList() else snapItems.ifEmpty { Hub.sentItems }
+                    val items = if (text != null) emptyList() else t?.items?.takeIf { it.isNotEmpty() } ?: snapItems.ifEmpty { Hub.sentItems }
                     if (dev != null && (items.isNotEmpty() || text != null)) {
                         val retry = Ui.jobButton(ctx, str(R.string.action_retry), Job.SEND, R.drawable.ic_refresh) {
                             finishWith(t)

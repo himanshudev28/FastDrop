@@ -7,19 +7,20 @@ import android.net.Uri
 import android.os.SystemClock
 import kotlin.concurrent.thread
 
-/** adb shell am broadcast -n com.fastdrop.app/.DebugSendReceiver --es ip 1.2.3.4 --es uri content://... */
+/** adb shell am broadcast -n com.fastdrop.app/.DebugSendReceiver --es ip 1.2.3.4 --es uri content://a,content://b */
 class DebugSendReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
         val ip = intent.getStringExtra("ip") ?: return
-        val uri = Uri.parse(intent.getStringExtra("uri") ?: return)
+        val uris = (intent.getStringExtra("uri") ?: return).split(',').filter { it.isNotBlank() }.map { Uri.parse(it.trim()) }
         Hub.init(ctx)
         val pending = goAsync()
         thread {
             try {
-                val item = Storage.itemFromUri(ctx, uri) ?: return@thread
+                val items = uris.mapNotNull { Storage.itemFromUri(ctx, it) }
+                if (items.isEmpty()) return@thread
                 val dev = Discovery.hello(ip, manual = true)
                     ?: Device("debug", ip, "phone", ip, Proto.PORT, SystemClock.elapsedRealtime(), true)
-                Sender.send(ctx.applicationContext, dev, listOf(item))
+                Sender.send(ctx.applicationContext, dev, items)
             } finally { pending.finish() }
         }
     }
