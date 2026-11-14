@@ -47,12 +47,16 @@ struct LiveTransfer: Equatable {
     var speed: Double = 0
     var state: TransferState = .running
     var message = ""
+    /// Pause / skip state (protocol section 7), sampled with the rest.
+    var paused = false
+    var skipped: Set<Int> = []
 
     var fraction: Double { transfer.total > 0 ? min(1, Double(done) / Double(transfer.total)) : 1 }
     var eta: Double { speed > 1 ? Double(transfer.total - done) / speed : .infinity }
 
     static func == (a: Self, b: Self) -> Bool {
         a.transfer === b.transfer && a.done == b.done && a.speed == b.speed && a.state == b.state && a.message == b.message
+            && a.paused == b.paused && a.skipped == b.skipped
     }
 }
 
@@ -548,6 +552,20 @@ final class AppModel {
         if batch != nil { batch?.stopped = true }
     }
 
+    /// Pause or resume the running transfer (only when the other device agreed to `ctl`).
+    func togglePause() {
+        guard let t = live?.transfer, live?.state == .running, t.ctlOn else { return }
+        t.setPaused(!t.paused)
+        live?.paused = t.paused
+    }
+
+    /// Drop one unfinished file from the running transfer.
+    func skipFile(_ index: Int) {
+        guard let t = live?.transfer, live?.state == .running, t.ctlOn else { return }
+        t.skipFile(index)
+        live?.skipped = t.skipped
+    }
+
     func dismissTransfer() {
         guard live?.state != .running else { return }
         withAnimation(Motion.pop) { live = nil }
@@ -583,6 +601,8 @@ final class AppModel {
             l.speed = l.speed == 0 ? instant : l.speed * 0.6 + instant * 0.4
         }
         l.done = d
+        l.paused = t.paused
+        l.skipped = t.skipped
         let st = t.state
         if st != .running {
             l.state = st
@@ -607,13 +627,15 @@ final class AppModel {
                     record(HistoryItem(name: Self.preview(text), size: Int64(text.utf8.count), path: nil, peer: t.peerName,
                                        outgoing: true, date: Date(), text: text))
                 } else {
-                    let label = t.fileCount == 1 ? (t.names.first ?? "1 file") : "\(t.fileCount) files"
+                    // Skipped files were not delivered
+                    let sent = t.fileCount - l.skipped.count
+                    let label = t.fileCount == 1 ? (t.names.first ?? "1 file") : "\(sent) file\(sent == 1 ? "" : "s")"
                     record(HistoryItem(name: label, size: t.total, path: nil, peer: t.peerName, outgoing: true, date: Date()))
                     withAnimation(Motion.pop) { picked.removeAll { lastItems.contains($0.url) } }
                 }
             } else {
                 if revealWhenDone { NSWorkspace.shared.activateFileViewerSelecting([saveFolder]) }
-                notifyIfInactive(title: "Received from \(t.peerName)", body: "\(t.fileCount) file\(t.fileCount == 1 ? "" : "s") · \(Fmt.bytes(t.total))")
+                notifyIfInactive(title: "Received from \(t.peerName)", body: "\(t.fileCount - l.skipped.count) file\(t.fileCount - l.skipped.count == 1 ? "" : "s") · \(Fmt.bytes(t.total))")
             }
             // Success cards leave on their own; failures stay until dismissed.
             let id = t.id

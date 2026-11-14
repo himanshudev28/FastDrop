@@ -129,6 +129,7 @@ public final class SendJob: @unchecked Sendable {
                                         "ts": ts, "chunk": Proto.chunk, "files": files]
             if let text { offer["text"] = text }
             if useCRC { offer["crc"] = true }
+            if text == nil { offer["ctl"] = true }   // pause / resume / skip (protocol section 7)
             if let key = stores.trust.senderKey(for: peer.id) {
                 offer["auth"] = Spec.auth(key: key, id: sid, dev: me.id, ts: ts,
                                           filesDigest: Spec.filesDigest(files: digestInput, text: text))
@@ -163,7 +164,7 @@ public final class SendJob: @unchecked Sendable {
 
         let total = items.reduce(Int64(0)) { $0 + $1.size }
         let t = Transfer(outgoing: true, peerName: peer.name, peerType: peer.type, total: total,
-                         names: text != nil ? ["Text"] : items.map(\.name))
+                         names: text != nil ? ["Text"] : items.map(\.name), sizes: text != nil ? [] : items.map(\.size))
         t.isText = text != nil
         t.code = Spec.code(id: sid)
         let gate = self.gate
@@ -193,15 +194,41 @@ public final class SendJob: @unchecked Sendable {
                 have[i] = Spec.indices(of: r, limit: Spec.chunkCount(size: items[i].size))
             }
         }
-        var present: Int64 = 0
-        for (i, set) in have { for ci in set { present += Spec.chunkLength(index: ci, size: items[i].size) } }
-        if present > 0 { t.preset(present) }
+        for (i, set) in have {
+            var present: Int64 = 0
+            for ci in set { present += Spec.chunkLength(index: ci, size: items[i].size) }
+            if present > 0 { t.preset(present, file: i) }
+        }
         let crc = useCRC && replyV >= 2 && resp["crc"] as? Bool == true
         t.crcOn = crc
+        let ctl = replyV >= 2 && resp["ctl"] as? Bool == true
+        let link = ctl ? CtlLink(sock: c) : nil
+        if let link {
+            t.enableCtl(link)
+            c.setReadTimeout(0)   // with ctl, CTRL reads never time out while the transfer runs
+        }
 
         onStart?(t)
         if stopNow { t.cancel() }
 
+        if let link {
+            // Full duplex: this thread reads pause / resume / skip and, last, the receiver's {"ok", "skipped"}.
+            let name = peer.name
+            let th = Thread {
+                do {
+                    try link.read(transfer: t) { o in
+                        if o["ok"] as? Bool == true {
+                            if let sk = o["skipped"] as? [NSNumber] { t.adoptSkipped(sk.map(\.intValue)) }
+                            t.finish(.done, "Sent")
+                        } else { t.finish(.failed, "Receiver reported an error") }
+                        return true
+                    }
+                } catch {
+                    if t.running { t.finish(.failed, "\(name) disconnected: \(error.localizedDescription)") }
+                }
+            }
+            th.name = "fd-send-ctl"; th.qualityOfService = .userInitiated; th.start()
+        }
         stream(items: items, have: have, crc: crc, sid: sid, ctrl: c, transfer: t)
         return nil
     }
@@ -241,6 +268,11 @@ public final class SendJob: @unchecked Sendable {
                     let first = firstError == nil
                     if first { firstError = error }
                     errLock.unlock()
+                    if first && t.running && t.ctlOn {
+                        // The receiver may have closed a data connection just after finishing (all files done or
+                        // skipped): give its final {"ok"} on CTRL a moment to arrive before calling this a failure.
+                        for _ in 0..<15 where t.running { Thread.sleep(forTimeInterval: 0.1) }
+                    }
                     if first && t.running { t.finish(.failed, "Transfer failed: \(error.localizedDescription)") }
                 }
             }
@@ -251,6 +283,7 @@ public final class SendJob: @unchecked Sendable {
         t.sentAll = true
 
         // Every byte is out; the receiver answers once it has flushed everything to disk.
+        if t.ctlOn { t.waitFinished(); return }   // the CTRL reader thread handles the answer
         ctrl.setTimeout(60)
         do {
             let fin = try ctrl.readJSON()
@@ -280,7 +313,11 @@ public final class SendJob: @unchecked Sendable {
         var crcBuf: UnsafeMutableRawPointer?
         defer { crcBuf?.deallocate() }
 
-        while t.running, let c = take() {
+        while t.running {
+            t.waitWhilePaused()   // paused: no new frames (the one in progress below always finishes)
+            guard t.running, let c = take() else { break }
+            t.waitWhilePaused()
+            if t.isSkipped(c.file) { continue }   // skipped files drop their queued chunks
             if c.file != cur {
                 if fd >= 0 { close(fd) }
                 fd = open(items[c.file].url.path, O_RDONLY)
@@ -332,7 +369,7 @@ public final class SendJob: @unchecked Sendable {
                 }
                 pos += sent; rem -= sent
                 if sent > 0 {
-                    t.add(Int(sent))
+                    t.add(Int(sent), file: c.file)
                     if let lim = stopAfterBytes, t.sessionDone >= lim {
                         t.finish(.failed, "Stopped after \(Fmt.bytes(t.sessionDone)) (test)")
                         throw FDError.cancelled

@@ -240,6 +240,7 @@ public final class Receiver: @unchecked Sendable {
         let knownDevice = dev.map { stores.trust.device($0) != nil } ?? false
         let resumable = v2 && dev != nil && (o["chunk"] as? NSNumber)?.intValue == Proto.chunk && text == nil
         let wantCRC = v2 && (o["crc"] as? Bool) == true && text == nil
+        let wantCtl = v2 && (o["ctl"] as? Bool) == true && text == nil
 
         guard gate.tryReserve() else { reply(c, false, "busy"); return }
         var reserved = true
@@ -281,8 +282,10 @@ public final class Receiver: @unchecked Sendable {
             return
         }
 
-        let t = Transfer(outgoing: false, peerName: fromName, peerType: fromType, total: total, names: files.map(\.name))
+        let t = Transfer(outgoing: false, peerName: fromName, peerType: fromType, total: total, names: files.map(\.name),
+                         sizes: files.map(\.size))
         t.code = code
+        if wantCtl { extra["ctl"] = true }
         let crc = wantCRC && agreeCRC()
         if crc { extra["crc"] = true }
         t.crcOn = crc
@@ -299,7 +302,9 @@ public final class Receiver: @unchecked Sendable {
         }
         let have = session.haveJSON()
         if !have.isEmpty { extra["have"] = have }
-        t.preset(session.presentBytes)
+        session.presetTransfer()
+        let link = wantCtl ? CtlLink(sock: c) : nil
+        if let link { t.enableCtl(link); t.skipHook = { [weak session] i in session?.skip(i) ?? false } }
 
         // The transfer owns the gate from here; it's released when the transfer finishes.
         reserved = false
@@ -318,6 +323,22 @@ public final class Receiver: @unchecked Sendable {
         do { try c.writeJSON(accept) } catch {
             t.finish(.cancelled, "\(fromName) cancelled"); return
         }
+        let reader = DispatchGroup()
+        if let link {
+            // Full duplex CTRL: read pause / resume / skip from the sender for as long as the transfer runs.
+            c.setReadTimeout(0)
+            reader.enter()
+            let th = Thread {
+                defer { reader.leave() }
+                do { try link.read(transfer: t, other: nil) } catch {
+                    if t.running && !session.complete { t.finish(.cancelled, "\(fromName) cancelled") }
+                }
+            }
+            th.name = "fd-recv-ctl"; th.qualityOfService = .userInitiated; th.start()
+        }
+        defer {
+            if link != nil { c.shutdown(); _ = reader.wait(timeout: .now() + 2) }   // reader must be gone before the fd closes
+        }
         do { try session.start() } catch {
             t.finish(.failed, "Couldn't save: \(error.localizedDescription)"); return
         }
@@ -326,14 +347,15 @@ public final class Receiver: @unchecked Sendable {
         while t.running && !session.complete {
             session.waitDone(0.5)
             if session.complete { break }
-            if c.peerClosed() { t.finish(.cancelled, "\(fromName) cancelled"); break }
+            if link == nil && c.peerClosed() { t.finish(.cancelled, "\(fromName) cancelled"); break }   // with ctl the reader sees it
+            // lastProgress stays "now" while paused, so a pause never trips the watchdog
             if Date().timeIntervalSince(t.lastProgress) > 30 { t.finish(.failed, "Transfer stalled"); break }
             if Date().timeIntervalSince(lastCheckpoint) >= 10 { session.checkpoint(); lastCheckpoint = Date() }
         }
         if session.complete && t.running {
             c.setTimeout(10)
             t.finish(.done, "Received")   // frees the gate first so an instant follow-up isn't "busy"
-            try? c.writeJSON(["ok": true])
+            if link != nil { t.sendFinalOK() } else { try? c.writeJSON(["ok": true]) }
         }
     }
 
@@ -349,7 +371,9 @@ public final class Receiver: @unchecked Sendable {
         defer { s.leave() }
         let t = s.transfer
         t.register(c)
-        c.setTimeout(30)   // a stream that goes quiet for 30 s is a stall
+        // A stream that goes quiet for 30 s is a stall. With ctl the sender may be paused, so the transfer's
+        // watchdog (which ignores paused time) decides instead of a socket timeout.
+        c.setTimeout(t.ctlOn ? 0 : 30)
 
         let cap = Proto.ioBuffer
         let buf = UnsafeMutableRawPointer.allocate(byteCount: cap, alignment: 16)
@@ -368,28 +392,39 @@ public final class Receiver: @unchecked Sendable {
                       off < s.files[fi].size, len == min(Int64(Proto.chunk), s.files[fi].size - off) else {
                     throw FDError.protocolError("bad frame")
                 }
-                let fd = try s.sink(fi)
-                var pos = off, rem = len
-                var sum: UInt32 = 0
-                while rem > 0 {
-                    let n = try c.readSome(buf, Int(min(rem, Int64(cap))))
-                    if n == 0 { throw FDError.protocolError("Sender disconnected") }
-                    if crcOn { sum = Spec.crc32(sum, buf.assumingMemoryBound(to: UInt8.self), n) }   // only when agreed
-                    var w = 0
-                    while w < n {
-                        let r = pwrite(fd, buf + w, n - w, off_t(pos) + off_t(w))
-                        if r < 0 { if errno == EINTR { continue }; throw FDError.errno("Write failed") }
-                        w += r
+                // A skipped file's frames are still read (and CRC-checked) but their payload is thrown away.
+                var discard = t.isSkipped(fi)
+                let fd = try discard ? -1 : s.sink(fi)
+                s.frameStart()
+                do {
+                    var pos = off, rem = len
+                    var sum: UInt32 = 0
+                    while rem > 0 {
+                        let n = try c.readSome(buf, Int(min(rem, Int64(cap))))
+                        if n == 0 { throw FDError.protocolError("Sender disconnected") }
+                        if crcOn { sum = Spec.crc32(sum, buf.assumingMemoryBound(to: UInt8.self), n) }   // only when agreed
+                        if !discard {
+                            var w = 0
+                            while w < n {
+                                let r = pwrite(fd, buf + w, n - w, off_t(pos) + off_t(w))
+                                if r < 0 { if errno == EINTR { continue }; throw FDError.errno("Write failed") }
+                                w += r
+                            }
+                        }
+                        pos += Int64(n); rem -= Int64(n)
+                        if !t.add(n, file: fi) { discard = true }   // skipped meanwhile: stop writing, keep reading
                     }
-                    pos += Int64(n); rem -= Int64(n)
-                    t.add(n)
+                    if crcOn {
+                        try c.readExact(buf, 4)
+                        let want = UInt32(bigEndian: buf.loadUnaligned(as: UInt32.self))
+                        if want != sum { throw FDError.dataCheck }
+                    }
+                    if !discard { try s.chunkDone(fi, off, len) }
+                } catch {
+                    s.frameEnd()
+                    throw error
                 }
-                if crcOn {
-                    try c.readExact(buf, 4)
-                    let want = UInt32(bigEndian: buf.loadUnaligned(as: UInt32.self))
-                    if want != sum { throw FDError.dataCheck }
-                }
-                try s.chunkDone(fi, off, len)
+                s.frameEnd()
             }
         } catch {
             if t.running && !s.complete {
@@ -426,6 +461,7 @@ final class RxSession: @unchecked Sendable {
     private var finished: [Bool]
     private var reserved = Set<String>()
     private var remaining: Int
+    private var inflight = 0             // DATA frames currently being read
     private var closed = false
     private(set) var complete = false
     private(set) var presentBytes: Int64 = 0
@@ -538,9 +574,32 @@ final class RxSession: @unchecked Sendable {
         if full { try finishFile(i) }
     }
 
+    /// Per-file bytes already in place from earlier sessions (resume).
+    func presetTransfer() {
+        for i in files.indices where got[i] > 0 { transfer.preset(got[i], file: i) }
+    }
+
+    /// A data stream starts / ends a frame. The session isn't complete while a frame is still being read, so the
+    /// final "ok" never goes out ahead of frames of skipped files that are still arriving.
+    func frameStart() { cond.lock(); inflight += 1; cond.unlock() }
+    func frameEnd() { cond.lock(); inflight -= 1; evalComplete(); cond.unlock() }
+
+    /// Caller holds `cond`.
+    private func evalComplete() {
+        if remaining == 0 && inflight == 0 && !complete { complete = true; cond.broadcast() }
+    }
+
+    /// Skip file `i` (section 7): true when it applied. Ignored when `i` is out of range, already skipped or complete.
+    /// Counts `i` as done; its partial file and resume record are deleted when the session ends.
+    func skip(_ i: Int) -> Bool {
+        guard transfer.markSkipped(i) else { return false }
+        cond.lock(); remaining -= 1; evalComplete(); cond.unlock()
+        return true
+    }
+
     private func finishFile(_ i: Int) throws {
         lock.lock()
-        guard !finished[i], !closed, let tmp = partials[i] else { lock.unlock(); return }
+        guard !finished[i], !closed, !transfer.isSkipped(i), let tmp = partials[i] else { lock.unlock(); return }
         finished[i] = true
         if fds[i] >= 0 { Darwin.close(fds[i]); fds[i] = -1 }
         let dest = uniqueURL(for: files[i].name)
@@ -553,7 +612,7 @@ final class RxSession: @unchecked Sendable {
 
         cond.lock()
         remaining -= 1
-        if remaining == 0 { complete = true; cond.broadcast() }
+        evalComplete()
         cond.unlock()
     }
 
@@ -579,7 +638,7 @@ final class RxSession: @unchecked Sendable {
         let wasDirty = dirty
         dirty = false
         var recs: [ResumeRecord] = []
-        for i in files.indices where !finished[i] && !done[i].isEmpty {
+        for i in files.indices where !finished[i] && !done[i].isEmpty && !transfer.isSkipped(i) {
             guard let key = resumeKeys[i], let p = partials[i] else { continue }
             recs.append(ResumeRecord(key: key, path: p.path, size: files[i].size, chunks: Spec.ranges(of: done[i]), updated: Date()))
         }
@@ -617,7 +676,7 @@ final class RxSession: @unchecked Sendable {
         var drop: [URL] = []
         for i in files.indices where !finished[i] {
             guard let p = partials[i] else { continue }
-            if resumeKeys[i] == nil || done[i].isEmpty {
+            if resumeKeys[i] == nil || done[i].isEmpty || transfer.isSkipped(i) {   // skipped: never kept for resume
                 drop.append(p)
                 if let key = resumeKeys[i] { stores.resume.remove(key) }
             }
