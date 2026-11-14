@@ -6,3 +6,4 @@
 - This works on Android, on Mac (the transfer card) and in the command-line tool. The CLI has a `--ctl-test` option for scripted pause, resume and skip.
 - Both devices need FastDrop 2.3 or newer. With an older device, transfers work exactly as before and Pause and ✕ are hidden.
 - None of this adds work per byte, so transfer speed is unchanged. See docs/PROTOCOL.md, section 7.
+- If the other device disappears while a transfer is paused, the transfer now ends with "connection lost" and offers Retry, instead of staying paused.
