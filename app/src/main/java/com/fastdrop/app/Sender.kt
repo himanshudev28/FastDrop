@@ -345,7 +345,10 @@ object Sender {
                     if (m.has("ok")) { fin.msg = m; break }
                     tr.onControl(m)
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                // CTRL closed before the receiver's final message: the receiver is gone. End now, or a
+                // paused send would wait forever (paused streams don't touch their sockets).
+                if (tr.running) Hub.end(tr, State.FAILED, str(R.string.msg_transfer_failed, str(R.string.msg_connection_lost)))
             } finally { fin.latch.countDown() }
         }
         return fin

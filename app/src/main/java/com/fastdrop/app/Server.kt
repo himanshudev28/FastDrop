@@ -216,7 +216,10 @@ object Server {
             }
             val checkpoint = timer.scheduleWithFixedDelay({ try { s.checkpoint() } catch (_: Exception) { } }, 10, 10, TimeUnit.SECONDS)
             if (ctl) thread(name = "ctl-read", isDaemon = true) {
-                try { while (t.running) t.onControl(Io.readJson(ch)) } catch (_: Exception) { }
+                try { while (t.running) t.onControl(Io.readJson(ch)) } catch (_: Exception) {
+                    // The sender went away mid-transfer. While paused no DATA flows to notice it, so end here.
+                    if (t.running && !s.complete) Hub.end(t, State.FAILED, str(R.string.msg_transfer_failed, str(R.string.msg_connection_lost)))
+                }
             }
             try {
                 s.start()
