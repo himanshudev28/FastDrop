@@ -34,7 +34,7 @@ A side only uses a v2 feature when the other side announced it (offer `"v":2` / 
 
 ### Device info
 
-Adds `"v": 2` and `"caps": ["text","resume","trust","crc"]`.
+Adds `"v": 2` and `"caps": ["text","resume","trust","crc","ctl"]` (`"ctl"` since FastDrop 2.3, see section 7).
 
 ### Offer (sender → receiver)
 
@@ -209,6 +209,54 @@ sides checksum every byte.
 Not a wire feature. The sender UI lets the user pick several devices. It runs one normal
 transfer per device, one after another (only one transfer runs at a time), then shows a summary
 such as "Sent to 2 of 3 devices".
+
+### 7. Pause, resume and skipping a file (FastDrop 2.3, capability `"ctl"`)
+
+Lets either side pause / resume a running transfer, or drop one file from it, without restarting.
+It adds **no per-byte work**: a few small JSON messages on the CTRL connection, nothing on DATA.
+
+**Negotiation.** A sender that supports it puts `"ctl": true` in a v2 file offer (never in a
+text offer). A receiver that supports it answers `"ctl": true` in the accept reply. Only when both
+did may either side send the messages below. Otherwise nothing changes (a 2.1/2.2 peer never sees
+them), and UIs hide Pause and per-file Skip.
+
+**Framing.** After the accept reply the CTRL connection is full duplex: each side reads
+`[len][json]` messages from it until the transfer ends, and serialises its own writes (one
+writer at a time). Messages carry `"t"`; unknown `"t"` values are ignored. The receiver's final
+message stays `{"ok": true, ...}` (no `"t"`) and still ends the exchange.
+
+| Message | Meaning |
+|---|---|
+| `{"t":"pause"}` | Pause the transfer. |
+| `{"t":"resume"}` | Resume it. |
+| `{"t":"skip","file":i}` | Drop file index `i` from this transfer. |
+
+**Pause.** One shared state: the latest `pause` / `resume` from either side wins, both sides show
+"Paused", and either can resume. While paused:
+- the sender writes no new DATA frames (a frame already started is finished, so framing stays
+  intact) and leaves its DATA connections open and idle;
+- neither side counts the paused time against its no-progress watchdog (2.x: 30 s without data
+  fails a transfer). Watchdogs restart from the moment the transfer resumes;
+- neither side applies a read timeout to the CTRL connection (with `ctl`, CTRL reads never time out
+  while the transfer runs; stalls are detected by the data watchdog as before).
+There is no time limit on a pause; the user can still Cancel (closing the connections).
+
+**Skip.** Either side may send `skip` for a file that is not finished yet. On sending *or* receiving
+`skip` for file `i`:
+- **Sender:** writes no further frames for `i` (frames already written stay valid).
+- **Receiver:** if `i` is already complete it ignores the skip and keeps the file. Otherwise it
+  marks `i` skipped: it still reads (and CRC-checks, if on) frames for `i` that arrive afterwards but
+  discards their payload, counts `i` as done for completion, never shows it as received, and when
+  the session ends deletes `i`'s partial file and its resume record.
+- **Both:** subtract `i`'s not-yet-moved bytes from the expected total, so progress and ETA stay right.
+  A skip for an index that is out of range, or already skipped, is ignored.
+
+The receiver's final message lists what was dropped: `{"ok": true, "skipped": [i, ...]}` (omit
+or `[]` when nothing was). If every file gets skipped, the receiver sends it as soon as all
+in-flight frames have been read. The sender treats skipped files as not delivered (history, "Sent").
+
+**Cancel** is unchanged: closing the connections. A receiver that stops reading CTRL still gets
+cancels through DATA connection errors, as before.
 
 ## Test vectors
 
