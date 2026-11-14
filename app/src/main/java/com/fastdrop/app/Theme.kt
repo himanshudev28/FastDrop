@@ -100,38 +100,6 @@ object Theme {
     val MEDIUM: Typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
     val MONO: Typeface = Typeface.MONOSPACE
 
-    // ---- temporary aliases so screens that are rebuilt in later stages still compile ----
-    val TEXT: Int get() = INK
-    val MUTED: Int get() = INK_2
-    val FAINT: Int get() = INK_3
-    val STROKE: Int get() = LINE
-    val STROKE_STRONG: Int get() = LINE_STRONG
-    val ACCENT: Int get() = Job.SEND.text
-    val ACCENT_2: Int get() = Job.RECEIVE.text
-    val SUCCESS: Int get() = Job.OK.text
-    val DANGER: Int get() = Job.DANGER.text
-    val WARNING: Int get() = INK_2
-    val SEND_A = C_SEND
-    val SEND_B = C_SEND
-    val RECV_A = C_RECEIVE
-    val RECV_B = C_RECEIVE
-    val WEB_A = C_WEB
-    val WEB_B = C_WEB
-    val CAT_APPS = C_OK
-    val CAT_PHOTOS = C_WEB
-    val CAT_VIDEOS = C_RECEIVE
-    val CAT_MUSIC = C_TEXT
-    val CAT_FILES: Int get() = INK_2
-    val SURFACE_3: Int get() = SURFACE_2
-    val BOLD: Typeface = MEDIUM
-    val BLACK: Typeface = MEDIUM
-    const val DUR_FAST = D_STATE
-    const val DUR = D_STATE
-    const val DUR_SLOW = D_SHEET
-    val EASE_OUT: TimeInterpolator = EASE_ENTER
-    val EASE_IN: TimeInterpolator = EASE_EXIT
-    val EASE_IN_OUT: TimeInterpolator = EASE_MOVE
-
     fun dp(ctx: Context, v: Float): Int = (v * ctx.resources.displayMetrics.density + 0.5f).toInt()
     fun dp(ctx: Context, v: Int): Int = dp(ctx, v.toFloat())
 

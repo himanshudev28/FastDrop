@@ -53,17 +53,17 @@ internal object HotspotLink {
     }
 
     private fun failText(reason: Int) = when (reason) {
-        1 -> "No free Wi‑Fi channel for a hotspot"
-        3 -> "Turn off your hotspot or tethering first"
-        4 -> "Hotspot is blocked on this device"
-        else -> "Couldn't start a hotspot"
+        1 -> Hub.app.getString(R.string.hot_no_channel)
+        3 -> Hub.app.getString(R.string.hot_turn_off_first)
+        4 -> Hub.app.getString(R.string.hot_blocked)
+        else -> Hub.app.getString(R.string.hot_cant_start)
     }
 
     @Suppress("DEPRECATION")
     @TargetApi(26)
     private fun startApi26(ctx: Context, cancelled: () -> Boolean): Links.HostNet? {
         val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-        if (wm == null) { lastError = "Wi‑Fi not available"; return null }
+        if (wm == null) { lastError = Hub.app.getString(R.string.hot_wifi_unavailable); return null }
         stop()
         val before = ifaceNames()
         var got: WifiManager.LocalOnlyHotspotReservation? = null
@@ -79,7 +79,7 @@ internal object HotspotLink {
                     if (abandoned.get()) { try { r?.close() } catch (_: Exception) { }; return }
                     got = r; latch.countDown()
                 }
-                override fun onStopped() { Links.hostLost(JoinInfo.MODE_HOTSPOT, "Hotspot stopped") }
+                override fun onStopped() { Links.hostLost(JoinInfo.MODE_HOTSPOT, Hub.app.getString(R.string.hot_stopped)) }
                 override fun onFailed(reason: Int) { fail = reason; latch.countDown() }
             }
             try {
@@ -93,9 +93,9 @@ internal object HotspotLink {
                     wm.startLocalOnlyHotspot(cb, Hub.main)
                 }
             } catch (_: SecurityException) {
-                lastError = "Allow Nearby devices / Location to start a hotspot"; return false
+                lastError = Hub.app.getString(R.string.hot_allow_nearby); return false
             } catch (_: Exception) {
-                lastError = "Couldn't start a hotspot"; return false
+                lastError = Hub.app.getString(R.string.hot_cant_start); return false
             }
             val end = SystemClock.elapsedRealtime() + 15_000
             while (!latch.await(250, TimeUnit.MILLISECONDS)) {
@@ -103,7 +103,7 @@ internal object HotspotLink {
             }
             if (got == null) {
                 abandoned.set(true)
-                lastError = if (fail >= 0) failText(fail) else "Hotspot took too long to start"
+                lastError = if (fail >= 0) failText(fail) else Hub.app.getString(R.string.hot_too_slow)
             }
             return got != null
         }
@@ -127,7 +127,7 @@ internal object HotspotLink {
         } catch (_: Exception) { }
         if (ssid.isNullOrEmpty()) {
             try { r.close() } catch (_: Exception) { }
-            lastError = "Couldn't read the hotspot details"
+            lastError = Hub.app.getString(R.string.hot_cant_read)
             return null
         }
         reservation = r
@@ -138,8 +138,8 @@ internal object HotspotLink {
     /** Starts the local-only hotspot. Blocking; returns null with [lastError] set on failure. */
     fun start(ctx: Context, cancelled: () -> Boolean): Links.HostNet? {
         lastError = null
-        if (Build.VERSION.SDK_INT < 26) { lastError = "Hotspot needs Android 8 or newer"; return null }
-        return try { startApi26(ctx, cancelled) } catch (_: Exception) { lastError = "Couldn't start a hotspot"; null }
+        if (Build.VERSION.SDK_INT < 26) { lastError = Hub.app.getString(R.string.hot_needs_8); return null }
+        return try { startApi26(ctx, cancelled) } catch (_: Exception) { lastError = Hub.app.getString(R.string.hot_cant_start); null }
     }
 
     @android.annotation.SuppressLint("NewApi")
@@ -174,12 +174,12 @@ internal object WifiJoin {
         val app = ctx.applicationContext
         appCtx = app
         val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        if (cm == null) { lastError = "Network service not available"; return null }
+        if (cm == null) { lastError = Hub.app.getString(R.string.hot_no_netservice); return null }
         val spec = try {
             val b = WifiNetworkSpecifier.Builder().setSsid(ssid)
             if (!pass.isNullOrEmpty()) b.setWpa2Passphrase(pass)
             b.build()
-        } catch (_: Exception) { lastError = "Wi‑Fi details were rejected"; return null }
+        } catch (_: Exception) { lastError = Hub.app.getString(R.string.hot_details_rejected); return null }
         val req = NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
             .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -201,7 +201,7 @@ internal object WifiJoin {
             cm.requestNetwork(req, cb, Hub.main, timeoutMs.toInt())
         } catch (_: Exception) {
             callback = null
-            lastError = "Couldn't ask Android to join the Wi‑Fi"
+            lastError = Hub.app.getString(R.string.hot_cant_ask_join)
             return null
         }
         val end = SystemClock.elapsedRealtime() + timeoutMs + 3000
@@ -213,7 +213,7 @@ internal object WifiJoin {
             try { cm.unregisterNetworkCallback(cb) } catch (_: Exception) { }
             callback = null
             network = null
-            lastError = if (unavailable) "The Wi‑Fi prompt was declined or timed out" else "Timed out joining the Wi‑Fi"
+            lastError = if (unavailable) Hub.app.getString(R.string.hot_prompt_declined) else Hub.app.getString(R.string.hot_join_timeout)
             return null
         }
         return n
@@ -228,7 +228,7 @@ internal object WifiJoin {
         val app = ctx.applicationContext
         appCtx = app
         val wm = app.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-        if (wm == null) { lastError = "Wi‑Fi not available"; return null }
+        if (wm == null) { lastError = Hub.app.getString(R.string.hot_wifi_unavailable); return null }
         try {
             prevId = try { wm.connectionInfo?.networkId ?: -1 } catch (_: Exception) { -1 }
             val quoted = "\"$ssid\""
@@ -241,7 +241,7 @@ internal object WifiJoin {
                 // Already saved earlier: reuse it.
                 id = try { wm.configuredNetworks?.firstOrNull { it.SSID == quoted }?.networkId ?: -1 } catch (_: Exception) { -1 }
             }
-            if (id == -1) { lastError = "Android wouldn't add the Wi‑Fi network. Join it from Settings."; return null }
+            if (id == -1) { lastError = Hub.app.getString(R.string.hot_wouldnt_add); return null }
             legacyId = id
             legacyActive = true
             wm.disconnect()
@@ -261,14 +261,14 @@ internal object WifiJoin {
                 }
                 Thread.sleep(400)
             }
-            lastError = "Timed out joining the Wi‑Fi"
+            lastError = Hub.app.getString(R.string.hot_join_timeout)
         } catch (_: SecurityException) {
-            lastError = "Android blocked joining the Wi‑Fi. Join it from Settings."
+            lastError = Hub.app.getString(R.string.hot_blocked_join)
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
-            lastError = "Cancelled"
+            lastError = Hub.app.getString(R.string.msg_cancelled)
         } catch (_: Exception) {
-            lastError = "Couldn't join the Wi‑Fi"
+            lastError = Hub.app.getString(R.string.hot_cant_join)
         }
         release()
         return null

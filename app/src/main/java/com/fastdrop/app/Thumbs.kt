@@ -60,11 +60,11 @@ object Thumbs {
     fun tintFor(name: String): Int {
         val e = ext(name)
         return when {
-            e in IMG -> Theme.CAT_PHOTOS
-            e in VID -> Theme.CAT_VIDEOS
-            e in AUD -> Theme.CAT_MUSIC
-            e == "apk" -> Theme.CAT_APPS
-            else -> Theme.CAT_FILES
+            e in IMG -> Theme.C_WEB
+            e in VID -> Theme.C_RECEIVE
+            e in AUD -> Theme.C_TEXT
+            e == "apk" -> Theme.C_OK
+            else -> Theme.INK_2
         }
     }
 

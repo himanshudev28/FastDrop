@@ -145,7 +145,7 @@ internal object PickUi {
             Ui.applyInsets(this, top = false, bottom = true)
         }
 
-        fun update(count: Int, sub: String, noun: String = "selected", anim: Boolean = true) =
+        fun update(count: Int, sub: String, noun: String = context.getString(R.string.pick_selected_word), anim: Boolean = true) =
             updateLine(if (count > 0) "$count $noun" else "", sub, count > 0, anim)
 
         /** The same bar for a custom line (the Text tab shows "Text, 128 characters"). */

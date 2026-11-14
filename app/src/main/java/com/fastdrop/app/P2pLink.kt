@@ -72,7 +72,7 @@ internal object P2pLink {
                 m.initialize(app, Looper.getMainLooper(), WifiP2pManager.ChannelListener {
                     // Framework dropped us: forget the channel (next call re-initialises) and tell Links.
                     synchronized(chLock) { channel = null }
-                    if (hostReady) Links.hostLost(JoinInfo.MODE_P2P, "Wi‑Fi Direct stopped")
+                    if (hostReady) Links.hostLost(JoinInfo.MODE_P2P, Hub.app.getString(R.string.p2p_stopped))
                     if (clientGroup) { clientGroup = false; Links.onJoinLost() }
                 }).also { channel = it }
             } catch (_: Exception) { null }
@@ -87,7 +87,7 @@ internal object P2pLink {
             when (i.action) {
                 WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION -> {
                     val on = i.getIntExtra(WifiP2pManager.EXTRA_WIFI_STATE, -1) == WifiP2pManager.WIFI_P2P_STATE_ENABLED
-                    if (!on && hostReady) Links.hostLost(JoinInfo.MODE_P2P, "Wi‑Fi Direct turned off")
+                    if (!on && hostReady) Links.hostLost(JoinInfo.MODE_P2P, Hub.app.getString(R.string.p2p_turned_off))
                 }
                 WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION -> checkAlive()
             }
@@ -102,7 +102,7 @@ internal object P2pLink {
             if (hostReady) {
                 m.requestGroupInfo(ch, WifiP2pManager.GroupInfoListener { g ->
                     if (g == null && hostReady) {
-                        if (second) Links.hostLost(JoinInfo.MODE_P2P, "Wi‑Fi Direct stopped")
+                        if (second) Links.hostLost(JoinInfo.MODE_P2P, Hub.app.getString(R.string.p2p_stopped))
                         else Hub.main.postDelayed({ checkAlive(true) }, 1500)
                     }
                 })
@@ -169,11 +169,11 @@ internal object P2pLink {
     }
 
     private fun why(code: Int) = when (code) {
-        WifiP2pManager.P2P_UNSUPPORTED -> "Wi‑Fi Direct isn't supported on this device"
-        WifiP2pManager.BUSY -> "Wi‑Fi Direct is busy, try again"
-        SEC -> "Allow the Nearby devices permission"
-        WifiP2pManager.ERROR -> "Wi‑Fi Direct failed. Is Wi‑Fi on?"
-        else -> "Wi‑Fi Direct failed ($code)"
+        WifiP2pManager.P2P_UNSUPPORTED -> Hub.app.getString(R.string.p2p_unsupported_device)
+        WifiP2pManager.BUSY -> Hub.app.getString(R.string.p2p_busy)
+        SEC -> Hub.app.getString(R.string.p2p_allow_permission)
+        WifiP2pManager.ERROR -> Hub.app.getString(R.string.p2p_failed_wifi_on)
+        else -> Hub.app.getString(R.string.p2p_failed_code, code)
     }
 
     private fun groupInfo(ch: WifiP2pManager.Channel): WifiP2pGroup? {
@@ -251,7 +251,7 @@ internal object P2pLink {
     fun startHost(ctx: Context, cancelled: () -> Boolean): Links.HostNet? {
         lastError = null
         val app = ctx.applicationContext
-        val ch = channel(app) ?: run { lastError = "Wi‑Fi Direct not available"; return null }
+        val ch = channel(app) ?: run { lastError = Hub.app.getString(R.string.p2p_not_available); return null }
         val m = manager ?: return null
         hostToken.incrementAndGet()
         acquire(app, "host")
@@ -306,7 +306,7 @@ internal object P2pLink {
         val ownConfig = created != A_LEGACY && Build.VERSION.SDK_INT >= 29
         val name = grp?.networkName?.takeIf { it.isNotEmpty() } ?: if (ownConfig) ssid else null
         val pw = grp?.passphrase?.takeIf { it.isNotEmpty() } ?: if (ownConfig) pass else null
-        if (name == null || pw == null) { lastError = "Couldn't read the Wi‑Fi Direct network details"; return null }
+        if (name == null || pw == null) { lastError = Hub.app.getString(R.string.p2p_cant_read); return null }
 
         val iface = grp?.`interface`
         var freq = 0
@@ -435,7 +435,7 @@ internal object P2pLink {
                     val mac = dev?.deviceAddress
                     if (!id.isNullOrEmpty() && id != Hub.myId && !mac.isNullOrEmpty()) {
                         Hub.upsertDevice(Device(
-                            id, rec["n"] ?: dev.deviceName ?: "Device",
+                            id, rec["n"] ?: dev.deviceName ?: Hub.app.getString(R.string.p2p_device),
                             if (rec["t"] == "tv") "tv" else "phone",
                             "0.0.0.0", Proto.PORT, SystemClock.elapsedRealtime(),
                             manual = false, via = Device.VIA_P2P, join = null, p2pAddress = mac))
@@ -483,14 +483,14 @@ internal object P2pLink {
     private fun connectAndWait(ctx: Context, timeoutMs: Long, cfg: () -> WifiP2pConfig): String? {
         lastError = null
         val app = ctx.applicationContext
-        val ch = channel(app) ?: run { lastError = "Wi‑Fi Direct not available"; return null }
+        val ch = channel(app) ?: run { lastError = Hub.app.getString(R.string.p2p_not_available); return null }
         val m = manager ?: return null
         acquire(app, "join")
         connecting = true
         try {
             stopDiscoveryQuiet(ch)
             removeGroupBlocking(ch)           // stale group would make connect() fail
-            val config = try { cfg() } catch (_: Exception) { lastError = "Wi‑Fi Direct details were rejected"; return null }
+            val config = try { cfg() } catch (_: Exception) { lastError = Hub.app.getString(R.string.p2p_details_rejected); return null }
             var r = action(10_000) { m.connect(ch, config, it) }
             if (!r.ok && r.code == WifiP2pManager.BUSY) {
                 Thread.sleep(1500)
@@ -507,13 +507,13 @@ internal object P2pLink {
                         val ip = ci.groupOwnerAddress?.hostAddress
                         if (ip != null) { clientGroup = true; return ip }
                     } else {
-                        lastError = "Wi‑Fi Direct made this phone the host"
+                        lastError = Hub.app.getString(R.string.p2p_made_host)
                         break
                     }
                 }
                 Thread.sleep(400)
             }
-            if (lastError == null) lastError = "Timed out connecting via Wi‑Fi Direct"
+            if (lastError == null) lastError = Hub.app.getString(R.string.p2p_timeout)
             try { m.cancelConnect(ch, null) } catch (_: Exception) { }
             try { m.removeGroup(ch, null) } catch (_: Exception) { }
             return null

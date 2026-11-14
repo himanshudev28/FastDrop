@@ -44,7 +44,7 @@ object Integrations {
 
     /** What the widget's status line says right now. */
     fun statusText(): String {
-        if (!Hub.ready) return "Ready"
+        if (!Hub.ready) return Hub.app.getString(R.string.widget_ready)
         val t = Hub.transfer
         val running = t != null && t.running
         val pct = if (t != null && running && t.total > 0) (t.done.get() * 100 / t.total).toInt().coerceIn(0, 100) else -1
@@ -69,8 +69,8 @@ object Integrations {
         val v = RemoteViews(ctx.packageName, R.layout.widget_fastdrop)
         v.setTextViewText(R.id.widget_status, status)
         // Flat fills live in the layout (Send orange / dark text, Receive ultramarine / white text).
-        v.setContentDescription(R.id.widget_send, "Send")
-        v.setContentDescription(R.id.widget_receive, "Receive")
+        v.setContentDescription(R.id.widget_send, ctx.getString(R.string.widget_cd_send))
+        v.setContentDescription(R.id.widget_receive, ctx.getString(R.string.widget_cd_receive))
         v.setOnClickPendingIntent(R.id.widget_send, openApp(ctx, OPEN_SEND, 31))
         v.setOnClickPendingIntent(R.id.widget_receive, openApp(ctx, OPEN_RECEIVE, 32))
         return v
@@ -113,8 +113,8 @@ class FastDropTileService : TileService() {
         val tile = qsTile ?: return
         val on = Hub.ready && Hub.receivable()
         tile.state = if (on) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
-        tile.label = "FastDrop"
-        if (Build.VERSION.SDK_INT >= 29) tile.subtitle = if (on) "Visible" else "Off"
+        tile.label = this.getString(R.string.notif_app_name)
+        if (Build.VERSION.SDK_INT >= 29) tile.subtitle = if (on) this.getString(R.string.tile_visible) else this.getString(R.string.tile_off)
         try { tile.icon = android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_tile) } catch (_: Exception) { }
         tile.updateTile()
     }

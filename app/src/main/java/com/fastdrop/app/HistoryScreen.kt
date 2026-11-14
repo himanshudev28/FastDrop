@@ -325,7 +325,7 @@ class HistoryScreen(host: MainActivity) : Screen(host) {
         // One quick action on the row itself; everything else is in the action sheet.
         val quick: View? = when {
             isInstallable(e) -> Ui.secondaryButton(c, s(R.string.hist_action_install), null, true) { install(e) }
-            e.text != null -> Ui.secondaryButton(c, s(R.string.hist_action_copy), null, true) { host.copyText("Text", e.text) }
+            e.text != null -> Ui.secondaryButton(c, s(R.string.hist_action_copy), null, true) { host.copyText(s(R.string.main_label_text), e.text) }
             else -> null
         }
         return Ui.row(c, null, titleOf(e), metaOf(e), quick ?: Ui.chevron(c), lead = plateOf(e)) { showActions(e) }
@@ -367,7 +367,7 @@ class HistoryScreen(host: MainActivity) : Screen(host) {
         val url = e.text != null && ProtoV2.isHttpUrl(e.text)
         val hasFiles = e.text == null && e.files.any { it.uri != null }
         if (e.text != null) {
-            val copy = act { host.copyText("Text", e.text) }
+            val copy = act { host.copyText(s(R.string.main_label_text), e.text) }
             if (url) {
                 add(Ui.jobButton(c, s(R.string.hist_action_open_link), Job.TEXT, R.drawable.ic_link, act { host.openUrl(e.text) }))
                 add(Ui.secondaryButton(c, s(R.string.hist_action_copy), R.drawable.ic_copy, onClick = copy))

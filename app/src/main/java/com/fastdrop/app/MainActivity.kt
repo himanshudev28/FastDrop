@@ -340,9 +340,9 @@ class MainActivity : Activity(), Hub.Listener {
         try {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             cm.setPrimaryClip(ClipData.newPlainText(label, text))
-            toast("$label copied", 1)
+            toast(getString(R.string.main_copied, label), 1)
         } catch (_: Exception) {
-            toast("Couldn't copy", 2)
+            toast(getString(R.string.main_cant_copy), 2)
         }
     }
 
@@ -368,7 +368,7 @@ class MainActivity : Activity(), Hub.Listener {
             startActivityForResult(PickerActivity.intent(this, tab, keep), REQ_PICK)
         } catch (_: Exception) {
             pickThen = null
-            toast("Can't open the picker", 2)
+            toast(getString(R.string.main_cant_open_picker), 2)
         }
     }
 
@@ -380,14 +380,14 @@ class MainActivity : Activity(), Hub.Listener {
 
     @Suppress("DEPRECATION")
     fun scanQr(forSend: Boolean) {
-        if (!QrScanActivity.hasCamera(this)) { toast("This device has no camera", 2); return }
+        if (!QrScanActivity.hasCamera(this)) { toast(getString(R.string.main_no_camera), 2); return }
         scanForSend = forSend
         try {
             startActivityForResult(
                 QrScanActivity.intent(this, if (forSend) "Scan the receiver's code" else "Scan the sender's code"),
                 REQ_SCAN)
         } catch (_: Exception) {
-            toast("Can't open the camera", 2)
+            toast(getString(R.string.main_cant_open_camera), 2)
         }
     }
 
@@ -398,7 +398,7 @@ class MainActivity : Activity(), Hub.Listener {
             sendTo(dev)
         } else {
             val go = {
-                toast("Connecting to ${info.name}…")
+                toast(getString(R.string.main_connecting_to, info.name))
                 Links.joinAsync(this, info) { ok, msg -> toast(msg, if (ok) 1 else 2) }
             }
             if (info.hasNetwork) ensureLinkPermissions { go() } else go()
@@ -419,7 +419,7 @@ class MainActivity : Activity(), Hub.Listener {
     /** Several devices, one transfer after another, then a "Sent to 2 of 3 devices" summary. */
     fun sendToMany(devs: List<Device>) {
         if (devs.isEmpty()) return
-        if (!hasPayload()) { toast("Choose what to send first", 2); return }
+        if (!hasPayload()) { toast(getString(R.string.main_choose_first), 2); return }
         if (devs.any { it.needsLink }) ensureLinkPermissions { startSending(devs) } else startSending(devs)
     }
 
@@ -438,8 +438,8 @@ class MainActivity : Activity(), Hub.Listener {
 
     /** Makes [text] the thing to send (instead of files) and opens "Send to". */
     fun setSendText(text: String) {
-        if (text.isBlank()) { toast("Nothing to send", 2); return }
-        if (text.codePointCount(0, text.length) > ProtoV2.MAX_TEXT) { toast("Text is too long (max 100 000 characters)", 2); return }
+        if (text.isBlank()) { toast(getString(R.string.main_nothing_to_send), 2); return }
+        if (text.codePointCount(0, text.length) > ProtoV2.MAX_TEXT) { toast(getString(R.string.main_text_too_long), 2); return }
         Hub.selection = emptyList()
         Hub.selectionText = text
         if (current is SendScreen) current?.refresh() else push(SendScreen(this))
@@ -453,14 +453,14 @@ class MainActivity : Activity(), Hub.Listener {
     } catch (_: Exception) { null }
 
     fun sendClipboard() {
-        val t = clipboardText() ?: return toast("Clipboard is empty", 2)
+        val t = clipboardText() ?: return toast(getString(R.string.main_clipboard_empty), 2)
         setSendText(t)
     }
 
     fun openUrl(url: String) {
         try {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url.trim())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        } catch (_: Exception) { toast("No app can open this link", 2) }
+        } catch (_: Exception) { toast(getString(R.string.main_no_app_link), 2) }
     }
 
     // ---------------------------------------------------------------- permissions
@@ -504,10 +504,10 @@ class MainActivity : Activity(), Hub.Listener {
         if (linkAsked) { then(false); return }
         linkAsked = true
         val body = if (Build.VERSION.SDK_INT >= 33)
-            "Allow Nearby devices so FastDrop can connect directly over Wi-Fi Direct. Sending on the same Wi-Fi works without it."
+            getString(R.string.main_nearby_why_33)
         else
-            "Android needs the Location permission to use Wi-Fi Direct. FastDrop doesn't read your location. Sending on the same Wi-Fi works without it."
-        confirm("Find nearby devices", body, "Continue", "Not now") { ok ->
+            getString(R.string.main_nearby_why_loc)
+        confirm(getString(R.string.main_find_nearby), body, getString(R.string.main_continue), getString(R.string.main_not_now)) { ok ->
             if (ok) ensurePermissions(perms) { then(it) } else then(false)
         }
     }
@@ -516,14 +516,14 @@ class MainActivity : Activity(), Hub.Listener {
         try {
             startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
         } catch (_: Exception) {
-            toast("Open Android Settings and allow it for FastDrop", 2)
+            toast(getString(R.string.main_open_android_settings), 2)
         }
     }
 
     // ---------------------------------------------------------------- dialogs
 
     /** Small bottom sheet with a message and one or two buttons. [onResult] gets true for the main button. */
-    fun confirm(title: String, body: String, positive: String, negative: String? = "Not now", onResult: (Boolean) -> Unit) {
+    fun confirm(title: String, body: String, positive: String, negative: String? = getString(R.string.main_not_now), onResult: (Boolean) -> Unit) {
         var decided = false
         var h: Sheets.Handle? = null
         fun answer(ok: Boolean) {
@@ -562,13 +562,13 @@ class MainActivity : Activity(), Hub.Listener {
     // ---------------------------------------------------------------- received files
 
     fun openReceived(r: Received) {
-        r.text?.let { copyText("Text", it); return }
+        r.text?.let { copyText(getString(R.string.main_label_text), it); return }
         if (AppInstaller.isApk(r.name)) {
             val group = AppInstaller.groups(Hub.received.toList()).firstOrNull { g -> g.any { it === r } }
             installApp(group ?: listOf(r))
             return
         }
-        val uri = r.uri ?: return toast("File not available", 2)
+        val uri = r.uri ?: return toast(getString(R.string.main_file_unavailable), 2)
         // Pre-Android-10 saves give file:// links; allow handing them to a viewer.
         if (uri.scheme == "file" && Build.VERSION.SDK_INT in 24..28) {
             try { StrictMode.setVmPolicy(StrictMode.VmPolicy.Builder().build()) } catch (_: Exception) { }
@@ -577,17 +577,17 @@ class MainActivity : Activity(), Hub.Listener {
             startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, Storage.mime(r.name))
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
         } catch (_: ActivityNotFoundException) {
-            toast("No app can open this file", 2)
+            toast(getString(R.string.main_no_app_file), 2)
         } catch (_: Exception) {
-            toast("Can't open it. Find it in Download/FastDrop", 2)
+            toast(getString(R.string.main_cant_open_file), 2)
         }
     }
 
     fun installApp(group: List<Received>) {
         if (!AppInstaller.canInstall(this)) {
-            confirm("Allow app installs",
-                "To install apps you receive, allow FastDrop in Android settings, then tap Install again.",
-                "Open settings") { ok -> if (ok) AppInstaller.openInstallSettings(this) }
+            confirm(getString(R.string.main_allow_installs),
+                getString(R.string.main_allow_installs_body),
+                getString(R.string.main_open_settings)) { ok -> if (ok) AppInstaller.openInstallSettings(this) }
             return
         }
         AppInstaller.install(this, group) { ok, msg ->
@@ -617,7 +617,7 @@ class MainActivity : Activity(), Hub.Listener {
                 val info = JoinInfo.parse(raw)
                 // r=s: the code belongs to a sender (we join and receive); r=r: a receiver (we send).
                 val forSend = when (codeRole(raw)) { "s" -> false; "r" -> true; else -> scanForSend }
-                if (info == null) toast("That's not a FastDrop code", 2) else handleJoin(info, forSend)
+                if (info == null) toast(getString(R.string.main_not_fastdrop_code), 2) else handleJoin(info, forSend)
             }
         }
     }
@@ -669,20 +669,20 @@ class MainActivity : Activity(), Hub.Listener {
 
     /** A fastdrop://join link from another app or the system camera never acts without a yes. */
     private fun confirmJoinLink(raw: JoinInfo, role: String?) {
-        val info = localOnly(raw) ?: return toast("That link doesn't point to a device on your network", 2)
+        val info = localOnly(raw) ?: return toast(getString(R.string.main_link_not_local), 2)
         val ip = info.hostIp ?: info.lanIps.firstOrNull()
         val who = if (ip != null) "${info.name} ($ip)" else info.name
-        val net = if (info.hasNetwork) "\nThis also joins the Wi-Fi \"${info.ssid}\"." else ""
+        val net = if (info.hasNetwork) getString(R.string.main_also_joins, info.ssid) else ""
         if (role == "s") {
-            confirm("Connect to ${info.name}?", "Join $who to receive files from it.$net", "Connect", "Cancel") { ok ->
+            confirm(getString(R.string.main_connect_to, info.name), getString(R.string.main_join_body, who, net), getString(R.string.main_connect), getString(R.string.main_cancel)) { ok ->
                 if (ok) handleJoin(info, false)
             }
             return
         }
         val n = Hub.selection.size
-        val body = if (n == 0) "Choose files to send to $who.$net"
-        else "Send $n item${if (n == 1) "" else "s"} to $who?$net"
-        confirm("Send to ${info.name}?", body, if (n == 0) "Choose files" else "Send", "Cancel") { ok ->
+        val body = if (n == 0) getString(R.string.main_choose_files_to, who, net)
+        else resources.getQuantityString(R.plurals.main_send_n_items_to, n, n, who, net)
+        confirm(getString(R.string.main_send_to, info.name), body, getString(if (n == 0) R.string.main_choose_files else R.string.main_send), getString(R.string.main_cancel)) { ok ->
             if (ok) handleJoin(info, true)
         }
     }
@@ -711,7 +711,7 @@ class MainActivity : Activity(), Hub.Listener {
         } else null
         setIntent(Intent())  // don't handle it again on the next resume
         uris.removeAll { it.scheme.equals("file", ignoreCase = true) }
-        if (uris.isEmpty() && text == null) { toast("Nothing to share", 2); return }
+        if (uris.isEmpty() && text == null) { toast(getString(R.string.main_nothing_to_share), 2); return }
         if (text != null) {
             // A fastdrop:// join link is not content to send; ask before acting on it. Anything else goes as text.
             val join = JoinInfo.parse(text)
@@ -723,14 +723,14 @@ class MainActivity : Activity(), Hub.Listener {
             return
         }
         val count = uris.size
-        toast("Preparing $count item${if (count == 1) "" else "s"}…")
+        toast(resources.getQuantityString(R.plurals.main_preparing_items, count, count))
         val app = applicationContext
         thread(name = "prepare") {
             val items = uris.mapNotNull { try { Storage.itemFromUri(app, it) } catch (_: Exception) { null } }
             Hub.main.post {
                 if (isDestroyed) return@post
                 if (items.isEmpty()) {
-                    toast("Couldn't read those files", 2)
+                    toast(getString(R.string.main_cant_read_files), 2)
                 } else {
                     Hub.selection = items
                     if (target != null) sendTo(target)

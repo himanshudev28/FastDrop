@@ -19,6 +19,8 @@ import kotlin.concurrent.thread
 
 /** Receiving side: accepts offers and writes incoming parallel streams straight to disk. */
 object Server {
+    private fun str(id: Int, vararg a: Any): String = Hub.app.getString(id, *a)
+
     private val pool = Executors.newCachedThreadPool()
     private val timer = Executors.newSingleThreadScheduledExecutor()
     private val sessions = ConcurrentHashMap<String, RxSession>()
@@ -39,7 +41,7 @@ object Server {
                     pool.execute { handle(ch) }
                 }
             } catch (e: Exception) {
-                error = "Can't listen on port ${Proto.PORT}: ${e.message}"
+                error = str(R.string.msg_cant_listen, Proto.PORT, e.message.toString())
                 Io.closeQuietly(ss)
                 Thread.sleep(3000)
             }
@@ -160,10 +162,10 @@ object Server {
                 Hub.release(); reserved = false
                 if (!reply(ch, true, "", true, extra)) return
                 try { Io.writeJson(ch, JSONObject().put("ok", true)) } catch (_: Exception) { }
-                val preview = text.trim().lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(60) ?: "Text"
+                val preview = text.trim().lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(60) ?: str(R.string.main_label_text)
                 Hub.addReceived(Received(preview, text.toByteArray(Charsets.UTF_8).size.toLong(), null, fromName, text = text))
                 HistoryStore.recordIncomingText(fromName, senderDev, text)     // history hook
-                Hub.message("Text from $fromName")
+                Hub.message(str(R.string.msg_text_from, fromName))
                 Io.closeQuietly(ch)
                 return
             }
@@ -192,7 +194,7 @@ object Server {
             Hub.begin(t)
             reserved = false             // the transfer owns the busy flag now; Hub.end releases it
             if (!reply(ch, true, "", v2, extra)) {
-                Hub.end(t, State.CANCELLED, "$fromName cancelled")
+                Hub.end(t, State.CANCELLED, str(R.string.msg_peer_cancelled, fromName))
                 s.closeOut()
                 sessions.remove(id)
                 return
@@ -203,10 +205,10 @@ object Server {
                 while (!s.complete && t.running) s.waitDone(500)
                 if (s.complete && t.running) {
                     try { Io.writeJson(ch, JSONObject().put("ok", true)) } catch (_: Exception) { }
-                    Hub.end(t, State.DONE, "Received")
+                    Hub.end(t, State.DONE, str(R.string.msg_received))
                 }
             } catch (e: Exception) {
-                Hub.end(t, State.FAILED, "Couldn't save: ${e.message}")
+                Hub.end(t, State.FAILED, str(R.string.msg_cant_save_why, e.message.toString()))
             } finally {
                 checkpoint.cancel(false)
                 s.closeOut()
@@ -278,7 +280,7 @@ object Server {
             }
         } catch (e: Exception) {
             if (t.running && !s.complete) {
-                s.fail(if (e is DataCheckException) "Data check failed" else "Transfer interrupted: ${e.message ?: "connection lost"}")
+                s.fail(if (e is DataCheckException) str(R.string.msg_data_check_failed) else str(R.string.msg_interrupted, e.message ?: str(R.string.msg_connection_lost)))
             }
         } finally {
             // A stream ending cleanly is normal (others may still be sending); real stalls hit the watchdog.
@@ -382,7 +384,7 @@ class RxSession(
         val uri = try { s.finish() } catch (_: Exception) {
             // Keep the resume record (the data is all there); closeOut() re-saves it. No "Received" entry.
             synchronized(recLock) { finished[i] = false }
-            fail("Couldn't save ${files[i].name}")
+            fail(Hub.app.getString(R.string.msg_cant_save_file, files[i].name))
             return
         }
         synchronized(recLock) { keys[i]?.let { Resume.remove(it) } }

@@ -104,7 +104,7 @@ object WebShare {
         try { TransferService.start(app) } catch (_: Exception) { }
         thread(name = "web-accept", isDaemon = true) { acceptLoop(ss, p) }
         thread(name = "web-reaper", isDaemon = true) { reaper() }
-        addEvent("Web share started", 0)
+        addEvent(Hub.app.getString(R.string.web_ev_started), 0)
         return true
     }
 
@@ -279,7 +279,7 @@ object WebShare {
                 if (first) {
                     first = false
                     val ip = (ch.socket().remoteSocketAddress as? InetSocketAddress)?.address?.hostAddress
-                    if (ip != null && seenIps.add(ip)) addEvent("Browser connected: $ip", 0)
+                    if (ip != null && seenIps.add(ip)) addEvent(Hub.app.getString(R.string.web_ev_connected, ip), 0)
                 }
                 if (!route(c, req)) break
             }
@@ -522,7 +522,7 @@ object WebShare {
             }
             if (end == size - 1 || size == 0L) {
                 synchronized(lock) { downloads++ }
-                addEvent("Downloaded ${name.take(60)} (${Io.bytes(size)})", 1)
+                addEvent(Hub.app.getString(R.string.web_ev_downloaded, name.take(60), Io.bytes(size)), 1)
             }
             return keep
         } catch (_: Exception) {
@@ -595,24 +595,24 @@ object WebShare {
 
         if (diskErr) {
             sink.abort()
-            addEvent("Upload failed (storage): ${name.take(60)}", 2)
+            addEvent(Hub.app.getString(R.string.web_ev_up_storage, name.take(60)), 2)
             sendText(c, 507, "", "Not enough space", false, false)
             return false
         }
         if (netErr || left > 0) {
             sink.abort()
-            addEvent("Upload interrupted: ${name.take(60)}", 2)
+            addEvent(Hub.app.getString(R.string.web_ev_up_interrupted, name.take(60)), 2)
             return false
         }
         val uri = sink.finish()
         if (uri == null) {
-            addEvent("Upload failed: ${name.take(60)}", 2)
+            addEvent(Hub.app.getString(R.string.web_ev_up_failed, name.take(60)), 2)
             sendText(c, 500, "", "Could not save file", false, false)
             return false
         }
-        Hub.addReceived(Received(name, cl, uri, "Browser"))
+        Hub.addReceived(Received(name, cl, uri, Hub.app.getString(R.string.web_browser_peer)))
         synchronized(lock) { uploads++ }
-        addEvent("Received ${name.take(60)} (${Io.bytes(cl)})", 2)
+        addEvent(Hub.app.getString(R.string.web_ev_received, name.take(60), Io.bytes(cl)), 2)
         send(c, 200, "OK", "application/json", "{\"ok\":true}".toByteArray(), req.keepAlive, false, listOf("Cache-Control: no-store"))
         return req.keepAlive
     }
