@@ -514,7 +514,7 @@ final class AppModel {
         let peer = devices.first { $0.id == b.peers[b.next].id } ?? b.peers[b.next]
         b.next += 1
         batch = b
-        batchStatus = "Sending to \(b.next) of \(b.peers.count) devices"
+        batchStatus = "Device \(b.next) of \(b.peers.count)"
         if !send(to: peer, urls: b.urls, text: b.text) {
             // send() already explained why. The same refusal would hit every remaining device, so stop here.
             batch?.stopped = true
