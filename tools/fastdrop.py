@@ -8,6 +8,7 @@ local network (protocol 1 + protocol 2, see docs/PROTOCOL.md).
   fastdrop.py hello <ip>
   fastdrop.py send <ip|name> <file|folder>... [--streams N] [--crc] [--name NAME] [--port P]
   fastdrop.py send <ip|name> --text "hello"        (or --clipboard)
+  (send/recv also take --ctl-test "1:pause,4:resume,6:skip=0": scripted pause/resume/skip for tests, protocol section 7)
   fastdrop.py recv [--dir DIR] [--accept ask|trusted|everyone] [--crc] [--port P]
   fastdrop.py trust list | trust remove <id>
   fastdrop.py selftest
@@ -38,7 +39,7 @@ MAX_TEXT = 100000
 DAY_MS = 24 * 3600 * 1000
 RECORD_TTL_MS = 7 * DAY_MS
 REPLAY_MAX = 2000
-CAPS = ["text", "resume", "trust", "crc"]
+CAPS = ["text", "resume", "trust", "crc", "ctl"]
 O_BINARY = getattr(os, "O_BINARY", 0)
 stop = threading.Event()
 
@@ -542,7 +543,117 @@ def _item(path, name):
     return it
 
 
-def build_offer(sid, name, dev, files, text=None, crc=False, key=None, ts=None, v2=True):
+# ------------------------------------------------------------------ pause / resume / skip (protocol section 7, cap "ctl")
+class Ctl:
+    """Full-duplex CTRL after accept: reader thread for pause/resume/skip (+ the final message), serialised writes."""
+
+    def __init__(self, sock, nfiles, skip_fn):
+        self.sock, self.nfiles, self.skip_fn = sock, nfiles, skip_fn
+        self.wlock = threading.Lock()
+        self.run = threading.Event(); self.run.set()     # set = running, clear = paused
+        self.resumed_at = 0.0
+        self.skipped = set()
+        self.final = None
+        self.final_evt = threading.Event()
+        self.closed = threading.Event()
+        self.t0 = time.time()
+
+    def log(self, arrow, text):
+        print("%sctl %s %s  [+%.1fs]" % ("\n" if sys.stdout.isatty() else "", arrow, text, time.time() - self.t0), flush=True)
+
+    def send(self, obj):
+        try:
+            with self.wlock:
+                send_json(self.sock, obj)
+        except OSError:
+            return False
+        return True
+
+    def apply(self, t, i=None):
+        """Local effect of a pause/resume/skip (from the peer or from our own user). True if it changed something."""
+        if t == "pause":
+            if self.run.is_set():
+                self.run.clear(); return True
+        elif t == "resume":
+            if not self.run.is_set():
+                self.resumed_at = time.time(); self.run.set(); return True
+        elif t == "skip":
+            if isinstance(i, int) and not isinstance(i, bool) and 0 <= i < self.nfiles and i not in self.skipped \
+                    and self.skip_fn(i):
+                self.skipped.add(i); return True
+        return False
+
+    def user(self, t, i=None):
+        """What pressing the button does: apply locally and tell the peer."""
+        if self.apply(t, i):
+            self.send({"t": t} if t != "skip" else {"t": "skip", "file": i})
+            self.log("->", t if t != "skip" else "skip file=%d" % i)
+        else:
+            self.log("--", "%s ignored locally%s" % (t, "" if i is None else " (file %s)" % i))
+
+    def reader(self):
+        try:
+            while not self.closed.is_set():
+                m = read_json(self.sock)
+                if not isinstance(m, dict):
+                    continue
+                t = m.get("t")
+                if t in ("pause", "resume"):
+                    self.log("<-", t); self.apply(t)
+                elif t == "skip":
+                    self.log("<-", "skip file=%s" % m.get("file")); self.apply("skip", m.get("file"))
+                elif t is None and "ok" in m:
+                    self.final = m
+                    self.final_evt.set()
+                    return
+        except Exception:
+            pass
+        finally:
+            self.closed.set()
+
+    def start_reader(self):
+        threading.Thread(target=self.reader, daemon=True).start()
+
+    def start_test(self, actions, started):
+        """--ctl-test: perform scripted actions, SECONDS counted from the moment DATA starts flowing."""
+        if not actions:
+            return
+
+        def go():
+            started.wait()
+            base = time.time()
+            for sec, act, arg in actions:
+                d = base + sec - time.time()
+                if d > 0 and self.closed.wait(d):
+                    return
+                if self.closed.is_set() or stop.is_set():
+                    return
+                self.user(act, arg)
+        threading.Thread(target=go, daemon=True).start()
+
+
+def parse_ctl_test(spec):
+    """"1:pause,4:resume,6:skip=0" -> [(1.0,'pause',None),(4.0,'resume',None),(6.0,'skip',0)] sorted by time."""
+    out = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            sec, act = part.split(":", 1)
+            sec = float(sec)
+            arg = None
+            if act.startswith("skip="):
+                arg = int(act[5:]); act = "skip"
+            if act not in ("pause", "resume", "skip") or (act == "skip" and arg is None) or sec < 0:
+                raise ValueError
+        except ValueError:
+            raise argparse.ArgumentTypeError("bad --ctl-test item %r (use SECONDS:pause|resume|skip=N)" % part)
+        out.append((sec, act, arg))
+    return sorted(out, key=lambda x: x[0])
+
+
+def build_offer(sid, name, dev, files, text=None, crc=False, key=None, ts=None, v2=True, ctl=False):
     """files: list of dicts (name,size,mtime). Returns the offer dict (auth added if key given)."""
     o = {"id": sid, "name": name, "type": "laptop"}
     ts = ts if ts is not None else now_ms()
@@ -554,6 +665,8 @@ def build_offer(sid, name, dev, files, text=None, crc=False, key=None, ts=None, 
         o["text"] = text
     if crc:
         o["crc"] = True
+    if ctl and v2 and text is None:
+        o["ctl"] = True
     if v2 and key:
         dig = files_digest([(f["name"], f["size"]) for f in files], text)
         o["auth"] = auth_hmac(key, canonical_string(sid, dev, ts, dig))
@@ -577,7 +690,7 @@ def do_send(a, state, ip, items, text):
         try: key = bytes.fromhex(state.keys[peer_id]["key"])
         except (ValueError, KeyError): key = None
     sid = str(uuid.uuid4())
-    offer = build_offer(sid, state.name, state.id, items, text, crc=bool(a.crc and v2), key=key, v2=v2)
+    offer = build_offer(sid, state.name, state.id, items, text, crc=bool(a.crc and v2), key=key, v2=v2, ctl=True)
     ctrl = socket.socket()
     ctrl.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
     ctrl.settimeout(CTRL_TIMEOUT)
@@ -631,6 +744,7 @@ def do_send(a, state, ip, items, text):
 
     q = queue.Queue()
     skipped = 0
+    pend = [0] * len(items)         # bytes of each file still queued (not yet started), for ctl skip
     for fi, it in enumerate(items):
         ci = 0
         while ci * CHUNK < it["size"]:
@@ -638,12 +752,30 @@ def do_send(a, state, ip, items, text):
                 skipped += chunk_len(it["size"], ci)
             else:
                 q.put((fi, ci * CHUNK, chunk_len(it["size"], ci)))
+                pend[fi] += chunk_len(it["size"], ci)
             ci += 1
     to_send = total - skipped
-    if skipped:
-        print("Resuming at %.0f%% (%s already on receiver)" % (100.0 * skipped / total, fmt_bytes(skipped)))
+    exp_sub = [0]                   # bytes dropped from the expected total by skips
     sent = [0]
     lock = threading.Lock()
+
+    ctl = None
+    started = threading.Event()
+    ctl_test = getattr(a, "ctl_test", None)
+    if offer.get("ctl") and resp.get("ctl") is True:
+        def skip_file(i):
+            with lock:
+                ctl.skipped.add(i)
+                exp_sub[0] += pend[i]; pend[i] = 0
+            return True
+        ctl = Ctl(ctrl, len(items), skip_file)
+        ctrl.settimeout(None)        # with ctl, CTRL reads never time out while the transfer runs
+        ctl.start_reader()
+        ctl.start_test(ctl_test, started)
+    elif ctl_test:
+        print("--ctl-test: pause/resume/skip is not available with %s (no ctl capability); ignoring" % peer_name)
+    if skipped:
+        print("Resuming at %.0f%% (%s already on receiver)" % (100.0 * skipped / total, fmt_bytes(skipped)))
     errors = []
     interrupted = threading.Event()
     limit = int(a.stop_after_mb * (1 << 20)) if a.stop_after_mb else 0
@@ -659,7 +791,11 @@ def do_send(a, state, ip, items, text):
             s.connect((ip, port))
             s.settimeout(30)
             s.sendall(struct.pack(">i", M_DATA) + struct.pack(">i", len(idb)) + idb)
-            while not stop.is_set() and not errors and not interrupted.is_set():
+            while not stop.is_set() and not errors and not interrupted.is_set() \
+                    and not (ctl and ctl.final_evt.is_set()):
+                if ctl and not ctl.run.is_set():        # paused: no new frames (the one in progress was finished)
+                    ctl.run.wait(0.3)
+                    continue
                 if limit and sent[0] >= limit:
                     interrupted.set()
                     break
@@ -668,6 +804,13 @@ def do_send(a, state, ip, items, text):
                 except queue.Empty:
                     s.sendall(struct.pack(">iqi", -1, 0, 0))
                     break
+                if ctl:
+                    with lock:
+                        drop = fi in ctl.skipped
+                        if not drop:
+                            pend[fi] = max(0, pend[fi] - ln)
+                    if drop:
+                        continue
                 s.sendall(struct.pack(">iqi", fi, off, ln))
                 f = handles.get(fi)
                 if f is None:
@@ -692,7 +835,9 @@ def do_send(a, state, ip, items, text):
                         with lock: sent[0] += n
             s.close()
         except Exception as e:
-            errors.append(repr(e))
+            # the receiver may close early once everything left was skipped: its final message explains it
+            if not (ctl and ctl.final_evt.wait(1.0)):
+                errors.append(repr(e))
         finally:
             for f in handles.values():
                 f.close()
@@ -701,6 +846,7 @@ def do_send(a, state, ip, items, text):
     ths = [threading.Thread(target=worker, daemon=True) for _ in range(nstreams)]
     for t in ths:
         t.start()
+    started.set()
     tty = sys.stdout.isatty()
     last_b, last_t, last_print = 0, t0, 0.0
     try:
@@ -708,9 +854,11 @@ def do_send(a, state, ip, items, text):
             time.sleep(0.25)
             now = time.time()
             if now - last_print >= (0.5 if tty else 3.0):
-                with lock: b = sent[0]
-                pct = 100.0 * (skipped + b) / total if total else 100
-                line = "  %5.1f%%  %7.1f MB/s  (%s/%s)" % (pct, mbs(b - last_b, now - last_t), fmt_bytes(skipped + b), fmt_bytes(total))
+                with lock: b = sent[0]; sub = exp_sub[0]
+                texp = total - sub
+                pct = min(100.0, 100.0 * (skipped + b) / texp) if texp > 0 else 100
+                line = "  %5.1f%%  %7.1f MB/s  (%s/%s)%s" % (pct, mbs(b - last_b, now - last_t), fmt_bytes(skipped + b), fmt_bytes(texp),
+                                                         "  PAUSED" if ctl and not ctl.run.is_set() else "")
                 print("\r" + line + "   " if tty else line, end="" if tty else "\n", flush=True)
                 last_b, last_t, last_print = b, now, now
     except KeyboardInterrupt:
@@ -726,9 +874,25 @@ def do_send(a, state, ip, items, text):
         print("Simulated interruption after %s (--stop-after-mb)" % fmt_bytes(sent[0]))
         ctrl.close()
         sys.exit(3)
+    if ctl:
+        to_send -= exp_sub[0]
     print("Sent %s in %.2fs, avg %.1f MB/s (%d streams)" % (fmt_bytes(to_send), el, mbs(to_send, el), nstreams))
     print("sent_bytes=%d skipped_bytes=%d" % (sent[0], skipped))
-    if not _wait_final(ctrl):
+    if ctl:
+        until = time.time() + 120
+        while not ctl.final_evt.is_set() and not ctl.closed.is_set() and time.time() < until and not stop.is_set():
+            ctl.final_evt.wait(0.5)
+        fin = ctl.final if ctl.final_evt.is_set() and ctl.final.get("ok") else None
+        if not fin:
+            sys.exit("receiver did not confirm the transfer")
+        sk = set()      # the receiver's list is authoritative (it ignores a skip for a file that already completed)
+        for x in fin.get("skipped") or []:
+            if isinstance(x, int) and 0 <= x < len(items):
+                sk.add(x)
+        if sk:
+            print("Skipped (not delivered): " + ", ".join("%d %s" % (i, items[i]["name"]) for i in sorted(sk)))
+        ctl.closed.set()
+    elif not _wait_final(ctrl):
         sys.exit("receiver did not confirm the transfer")
     print("Done. Total incl. receiver finalize: %.2fs" % (time.time() - t0))
     ctrl.close()
@@ -809,6 +973,7 @@ class Stdin:
 class Slot:
     def __init__(self, raw_name, size, mtime, key, comps, base, v2, idx=0, sid=""):
         self.raw, self.size, self.mtime, self.key = raw_name, size, mtime, key
+        self.idx = idx
         self.comps = comps
         self.rel = "/".join(comps)
         d = os.path.join(base, *comps[:-1]) if len(comps) > 1 else base
@@ -896,6 +1061,11 @@ class Session:
     def __init__(self, sid, dev, v2, slots, crc):
         self.id, self.dev, self.v2, self.slots, self.crc = sid, dev, v2, slots, crc
         self.total = sum(s.size for s in slots)
+        self.exp = self.total   # expected bytes: total minus the not-yet-moved part of skipped files
+        self.skipped = set()    # file indexes dropped by ctl skip
+        self.inflight = 0       # DATA frames currently being read
+        self.ctl = None
+        self.started = threading.Event()    # first DATA frame header seen
         self.verified = 0       # bytes in verified frames (+ pre-existing resumed chunks)
         self.progress = 0       # live bytes incl. unverified (for display)
         self.failed = None
@@ -906,6 +1076,21 @@ class Session:
         self.last_activity = time.time()
         if self.total == 0:
             self.done.set()
+
+    def check_done_locked(self):
+        if self.verified >= self.exp and self.inflight == 0:
+            self.done.set()
+
+    def skip_file(self, i):
+        """ctl skip: False (ignored) if i is already complete, empty or already skipped."""
+        sl = self.slots[i]
+        with self.lock:
+            if i in self.skipped or sl.size == 0 or len(sl.done) >= sl.nchunks:
+                return False
+            self.exp -= sl.size - sum(chunk_len(sl.size, k) for k in sl.done)
+            self.skipped.add(i)
+            self.check_done_locked()
+        return True
 
 
 class Receiver:
@@ -947,6 +1132,9 @@ class Receiver:
         with st.lock:
             for sl, done in zip(s.slots, snaps):
                 if sl.size == 0 or not s.v2 or not sl.key:
+                    continue
+                if sl.idx in s.skipped:
+                    st.records.pop(sl.key, None)
                     continue
                 if sl.final or not done or len(done) >= sl.nchunks:
                     if sl.key in st.records and (sl.final or len(done) >= sl.nchunks):
@@ -1108,6 +1296,9 @@ class Receiver:
             crc = bool(v2 and o.get("crc") and self.use_crc)
             if crc:
                 reply["crc"] = True
+            ctl_ok = bool(v2 and o.get("ctl") is True)
+            if ctl_ok:
+                reply["ctl"] = True
             slots = []
             seen_keys = set()
             for i, (rn, sz, mt) in enumerate(raw):
@@ -1120,6 +1311,8 @@ class Receiver:
                     seen_keys.add(key)
                 slots.append(Slot(rn, sz, mt, key, comps, self.dir, v2, i, sid))
             s = Session(sid, dev, v2, slots, crc)
+            if ctl_ok:
+                s.ctl = Ctl(c, len(slots), s.skip_file)
             have = {}
             used = set()
             for i, sl in enumerate(slots):
@@ -1150,6 +1343,8 @@ class Receiver:
                 print("Resuming: %s already present" % fmt_bytes(s.verified))
             if s.verified >= s.total:
                 s.done.set()
+            if not ctl_ok and getattr(self.a, "ctl_test", None):
+                print("--ctl-test: pause/resume/skip is not available with '%s' (no ctl capability); ignoring" % sender)
             with self.slock:
                 self.sessions[sid] = s
             send_json(c, reply)
@@ -1170,23 +1365,34 @@ class Receiver:
     def watch(self, c, s):
         c.settimeout(None)
         tty = sys.stdout.isatty()
+        ctl = s.ctl
+        if ctl:
+            ctl.start_reader()      # blocking reads: with ctl, CTRL never times out while the transfer runs
+            ctl.start_test(getattr(self.a, "ctl_test", None), s.started)
         last_b, last_t, last_ck, last_print = s.progress, time.time(), time.time(), 0.0
         while not s.done.is_set() and not s.failed and not stop.is_set():
             s.done.wait(0.4)
             now = time.time()
-            try:
-                r, _, _ = select.select([c], [], [], 0)
-                if r and not c.recv(1, socket.MSG_PEEK):
+            if ctl:
+                if ctl.closed.is_set() and not s.done.is_set():
                     s.failed = "sender disconnected"
-            except (OSError, ValueError):
-                s.failed = "sender disconnected"
+                if not ctl.run.is_set():
+                    s.last_activity = now       # paused time doesn't count against the no-progress watchdog
+            else:
+                try:
+                    r, _, _ = select.select([c], [], [], 0)
+                    if r and not c.recv(1, socket.MSG_PEEK):
+                        s.failed = "sender disconnected"
+                except (OSError, ValueError):
+                    s.failed = "sender disconnected"
             if now - last_ck >= 10:
                 self.save_records(s); last_ck = now
             with s.lock:
                 b = s.progress
                 if b != last_b: s.last_activity = now
             if now - last_print >= (0.5 if tty else 3.0) and s.total:
-                line = "  %5.1f%%  %7.1f MB/s" % (100.0 * b / s.total, mbs(b - last_b, now - last_t))
+                line = "  %5.1f%%  %7.1f MB/s%s" % (min(100.0, 100.0 * b / s.exp) if s.exp > 0 else 100.0, mbs(b - last_b, now - last_t),
+                                                    "  PAUSED" if ctl and not ctl.run.is_set() else "")
                 print("\r" + line + "   " if tty else line, end="" if tty else "\n", flush=True)
                 last_b, last_t, last_print = b, now, now
             if now - s.last_activity > 60 and not s.done.is_set():
@@ -1194,10 +1400,19 @@ class Receiver:
         el = time.time() - s.t0
         if s.done.is_set() and not s.failed:
             paths = self.finalize(s)
-            send_json(c, {"ok": True})
-            print("\nReceived %s in %.2fs, avg %.1f MB/s" % (fmt_bytes(s.total), el, mbs(s.total, el)))
+            if ctl:
+                msg = {"ok": True}
+                if s.skipped:
+                    msg["skipped"] = sorted(s.skipped)
+                ctl.closed.set()        # the reader's EOF after our final message is not a failure
+                ctl.send(msg)
+            else:
+                send_json(c, {"ok": True})
+            print("\nReceived %s in %.2fs, avg %.1f MB/s" % (fmt_bytes(s.exp), el, mbs(s.exp, el)))
             for p in paths:
                 print("   -> " + p, flush=True)
+            if s.skipped:
+                print("Skipped (not received): " + ", ".join("%d %s" % (i, s.slots[i].rel) for i in sorted(s.skipped)), flush=True)
         else:
             print("\nTransfer failed: %s" % (s.failed or "aborted"), flush=True)
             self.fail(s)
@@ -1207,6 +1422,10 @@ class Receiver:
         out = []
         for sl in s.slots:
             sl.close()
+            if sl.idx in s.skipped:     # dropped by ctl skip: no file, no partial, no resume record
+                try: os.unlink(sl.partial)
+                except OSError: pass
+                continue
             final = os.path.join(sl.dir, sl.comps[-1])
             root, ext = os.path.splitext(final); k = 1
             while os.path.exists(final):
@@ -1229,10 +1448,25 @@ class Receiver:
             time.sleep(0.05)
         for sl in s.slots:
             sl.close()
-            if not (s.v2 and sl.key and sl.done):
+            if not (s.v2 and sl.key and sl.done) or sl.idx in s.skipped:
                 try: os.unlink(sl.partial)
                 except OSError: pass
         self.save_records(s)
+
+    @staticmethod
+    def frame_start(c, s, ctl):
+        """Read the first byte of the next DATA frame. While paused (or just resumed) a read timeout is not an error."""
+        while True:
+            try:
+                b = c.recv(1)
+            except socket.timeout:
+                if (not ctl.run.is_set() or time.time() - ctl.resumed_at < 30) and not s.done.is_set() \
+                        and not s.failed and not stop.is_set():
+                    continue
+                raise
+            if not b:
+                raise EOFError("sender disconnected")
+            return b
 
     def data(self, c):
         idl = read_int(c)
@@ -1248,42 +1482,62 @@ class Receiver:
         c.settimeout(30)
         with s.lock: s.conns += 1
         buf = bytearray(1 << 20); mv = memoryview(buf)
+        ctl = s.ctl
         try:
             while not s.done.is_set() and not stop.is_set() and not s.failed:
-                fi, off, ln = struct.unpack(">iqi", read_exact(c, 16))
+                if ctl:
+                    b0 = self.frame_start(c, s, ctl)    # waits through a pause instead of timing out
+                    fi, off, ln = struct.unpack(">iqi", b0 + read_exact(c, 15))
+                else:
+                    fi, off, ln = struct.unpack(">iqi", read_exact(c, 16))
                 if fi < 0:
                     break
                 if fi >= len(s.slots) or off < 0 or ln < 0 or off + ln > s.slots[fi].size:
                     raise IOError("bad frame")
-                sl = s.slots[fi]
-                aligned = off % CHUNK == 0 and ln == chunk_len(sl.size, off // CHUNK)
-                ci = off // CHUNK
-                skip = aligned and ci in sl.done
-                pos, rem, crc = off, ln, 0
-                while rem > 0:
-                    n = c.recv_into(mv, min(rem, len(buf)))
-                    if n == 0:
-                        raise EOFError("sender disconnected")
-                    if not skip:
-                        sl.write(pos, mv[:n])
-                        if s.crc: crc = crc32(mv[:n], crc)
-                    pos += n; rem -= n
-                    with s.lock: s.progress += 0 if skip else n
-                if s.crc:
-                    want = struct.unpack(">I", read_exact(c, 4))[0]
-                    if not skip and want != crc:
-                        raise IOError("Data check failed (CRC mismatch)")
-                if skip:
-                    continue
-                with s.lock:
-                    s.verified += ln
-                    if aligned:
-                        sl.done.add(ci)
-                    fdone = len(sl.done) >= sl.nchunks
-                    if s.verified >= s.total:
-                        s.done.set()
-                if fdone:
-                    sl.mark_complete()      # release the fd as soon as the file is complete
+                s.started.set()
+                with s.lock: s.inflight += 1
+                counted = True
+                try:
+                    sl = s.slots[fi]
+                    aligned = off % CHUNK == 0 and ln == chunk_len(sl.size, off // CHUNK)
+                    ci = off // CHUNK
+                    skip = aligned and ci in sl.done
+                    drop = fi in s.skipped      # ctl skip: keep reading (and CRC-checking) but discard the payload
+                    pos, rem, crc = off, ln, 0
+                    while rem > 0:
+                        n = c.recv_into(mv, min(rem, len(buf)))
+                        if n == 0:
+                            raise EOFError("sender disconnected")
+                        if drop:
+                            s.last_activity = time.time()
+                            if s.crc: crc = crc32(mv[:n], crc)
+                        elif not skip:
+                            sl.write(pos, mv[:n])
+                            if s.crc: crc = crc32(mv[:n], crc)
+                        pos += n; rem -= n
+                        if not drop:
+                            with s.lock: s.progress += 0 if skip else n
+                    if s.crc:
+                        want = struct.unpack(">I", read_exact(c, 4))[0]
+                        if not skip and want != crc:
+                            raise IOError("Data check failed (CRC mismatch)")
+                    if skip:
+                        continue
+                    with s.lock:
+                        s.inflight -= 1; counted = False
+                        if fi not in s.skipped:     # (a skip may have arrived while this frame was in flight)
+                            s.verified += ln
+                            if aligned:
+                                sl.done.add(ci)
+                        fdone = fi not in s.skipped and len(sl.done) >= sl.nchunks
+                        s.check_done_locked()
+                    if fdone:
+                        sl.mark_complete()      # release the fd as soon as the file is complete
+                finally:
+                    if counted:
+                        with s.lock:
+                            s.inflight -= 1
+                            s.check_done_locked()
         except Exception as e:
             if not s.done.is_set() and not s.failed:
                 s.failed = "data stream error: %r" % (e,)
@@ -1484,6 +1738,8 @@ def main(argv=None):
     p.add_argument("--name", help="name shown to the receiver"); p.add_argument("--text", help="send this text instead of files")
     p.add_argument("--clipboard", action="store_true", help="send the clipboard text")
     p.add_argument("--stop-after-mb", type=float, default=0, help=argparse.SUPPRESS)
+    p.add_argument("--ctl-test", type=parse_ctl_test, metavar="SECONDS:ACTION[,...]",
+                   help="test hook: scripted pause|resume|skip=N, seconds counted from when DATA starts")
     common(p); p.set_defaults(f=cmd_send)
     p = sp.add_parser("recv", help="receive files")
     p.add_argument("--dir", default="./fd_received"); p.add_argument("--name")
@@ -1491,6 +1747,8 @@ def main(argv=None):
     p.add_argument("--no-crc", action="store_true", help="refuse CRC32 verification even when the sender asks (default: agree)")
     p.add_argument("--crc", action="store_true", help=argparse.SUPPRESS)  # old flag, now the default
     p.add_argument("--no-discovery", action="store_true")
+    p.add_argument("--ctl-test", type=parse_ctl_test, metavar="SECONDS:ACTION[,...]",
+                   help="test hook: scripted pause|resume|skip=N, seconds counted from when DATA starts")
     p.add_argument("--non-interactive", action="store_true", help=argparse.SUPPRESS)
     common(p); p.set_defaults(f=cmd_recv)
     p = sp.add_parser("trust", help="list or remove trusted devices"); p.add_argument("action", choices=["list", "remove"])
