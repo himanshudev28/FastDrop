@@ -20,6 +20,12 @@ struct TransferCard: View {
         }
     }
 
+    @State private var showFiles = false
+
+    /// Pause/resume/skip was agreed with the other device (protocol section 7); otherwise those controls stay hidden.
+    private var hasCtl: Bool { model.live?.transfer.ctlOn ?? false }
+    private var paused: Bool { phase == .running && (model.live?.paused ?? false) }
+
     private var outgoing: Bool { model.live?.transfer.outgoing ?? true }
     private var peerName: String { model.live?.transfer.peerName ?? model.pending?.peer.name ?? "device" }
     private var peerType: String { model.live?.transfer.peerType ?? model.pending?.peer.type ?? "phone" }
@@ -60,7 +66,18 @@ struct TransferCard: View {
                         Text(footer).font(.caption).monospacedDigit().foregroundStyle(.secondary)
                             .contentTransition(.numericText())
                         Spacer()
+                        if hasCtl, let l = model.live, l.transfer.fileCount > 1, !l.transfer.isText {
+                            Button {
+                                withAnimation(Motion.pop(reduceMotion)) { showFiles.toggle() }
+                            } label: {
+                                Label(showFiles ? "Hide files" : "Files", systemImage: showFiles ? "chevron.up" : "chevron.down")
+                                    .labelStyle(.titleAndIcon).font(.caption)
+                            }
+                            .buttonStyle(.plain).foregroundStyle(.secondary)
+                            .accessibilityLabel(showFiles ? "Hide file list" : "Show file list")
+                        }
                     }
+                    if showFiles, hasCtl, let l = model.live { fileList(l) }
                 }
                 .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
             }
@@ -74,6 +91,39 @@ struct TransferCard: View {
         .animation(Motion.pop(reduceMotion), value: phase)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(title). \(subtitle)")
+    }
+
+    /// One row per file (first 50): finished files get a check, skipped ones read "Skipped", the rest a skip button.
+    private func fileList(_ l: LiveTransfer) -> some View {
+        ScrollView {
+            VStack(spacing: 2) {
+                ForEach(Array(l.transfer.names.enumerated()), id: \.offset) { i, name in
+                    let skipped = l.skipped.contains(i)
+                    let finished = !skipped && l.transfer.isFileFinished(i)
+                    HStack(spacing: 8) {
+                        Text(name).font(.caption).lineLimit(1).truncationMode(.middle)
+                            .strikethrough(skipped)
+                            .foregroundStyle(skipped ? .tertiary : .primary)
+                        Spacer(minLength: 8)
+                        if skipped {
+                            Text("Skipped").font(.caption2).foregroundStyle(.secondary)
+                        } else if finished {
+                            Image(systemName: "checkmark").font(.caption2.weight(.bold)).foregroundStyle(Palette.success)
+                                .accessibilityLabel("Finished")
+                        } else {
+                            Button { model.skipFile(i) } label: {
+                                Image(systemName: "forward.end.fill").font(.caption2)
+                            }
+                            .buttonStyle(.borderless).foregroundStyle(.secondary)
+                            .help("Skip this file")
+                            .accessibilityLabel("Skip \(name)")
+                        }
+                    }
+                    .padding(.horizontal, 4).frame(minHeight: 22)
+                }
+            }
+        }
+        .frame(maxHeight: 132)
     }
 
     @ViewBuilder private var surface: some View {
@@ -111,9 +161,13 @@ struct TransferCard: View {
     @ViewBuilder private var center: some View {
         switch phase {
         case .running:
-            Text("\(Int(fraction * 100))%")
-                .font(.system(.caption, design: .rounded, weight: .semibold)).monospacedDigit()
-                .contentTransition(.numericText(value: fraction * 100))
+            if paused {
+                Image(systemName: "pause.fill").font(.callout).foregroundStyle(.secondary)
+            } else {
+                Text("\(Int(fraction * 100))%")
+                    .font(.system(.caption, design: .rounded, weight: .semibold)).monospacedDigit()
+                    .contentTransition(.numericText(value: fraction * 100))
+            }
         case .done:
             Image(systemName: "checkmark").font(.title3.weight(.bold)).foregroundStyle(Palette.success)
                 .symbolEffect(.bounce, value: phase == .done)
@@ -136,6 +190,7 @@ struct TransferCard: View {
                     .animation(.smooth, value: fraction)
             }
         }
+        .opacity(paused ? 0.45 : 1)
         .frame(height: 5)
         .accessibilityHidden(true)
     }
@@ -154,22 +209,24 @@ struct TransferCard: View {
 
     private var subtitle: String {
         guard let l = model.live, phase != .pending else { return model.pending?.status ?? "Connecting…" }
-        let n = l.transfer.fileCount
+        let n = l.transfer.fileCount - l.skipped.count
         let files = l.transfer.isText ? "Text" : "\(n) file\(n == 1 ? "" : "s")"
+        let skippedNote = l.skipped.isEmpty ? "" : " · \(l.skipped.count) skipped"
         switch phase {
         case .running:
             let resumed = l.transfer.baseline > 0 ? "Resumed at \(Int(Double(l.transfer.baseline) * 100 / Double(max(1, l.transfer.total)))) % · " : ""
-            return "\(resumed)\(files) · \(Fmt.bytes(l.done)) of \(Fmt.bytes(l.transfer.total))"
+            return "\(paused ? "Paused · " : "")\(resumed)\(files)\(skippedNote) · \(Fmt.bytes(l.done)) of \(Fmt.bytes(l.transfer.total))"
         case .done:
             if l.transfer.isText { return "Text sent" }
             let sp = l.speed > 1 ? " · \(Fmt.speed(l.speed)) avg" : ""
-            return "\(files) · \(Fmt.bytes(l.transfer.total))\(sp)"
+            return "\(files)\(skippedNote) · \(Fmt.bytes(l.transfer.total))\(sp)"
         default: return l.message.isEmpty ? "Transfer stopped" : l.message
         }
     }
 
     private var footer: String {
         guard let l = model.live else { return "" }
+        if paused { return "Paused" }
         return "\(Fmt.speed(l.speed)) · \(Fmt.duration(l.eta)) left"
     }
 
@@ -179,6 +236,13 @@ struct TransferCard: View {
         HStack(spacing: 8) {
             switch phase {
             case .pending, .running:
+                if phase == .running, hasCtl, !(model.live?.transfer.isText ?? true) {
+                    Button { model.togglePause() } label: {
+                        Label(paused ? "Resume" : "Pause", systemImage: paused ? "play.fill" : "pause.fill")
+                    }
+                    .help(paused ? "Resume the transfer" : "Pause the transfer")
+                    .accessibilityLabel(paused ? "Resume transfer" : "Pause transfer")
+                }
                 Button("Cancel") { model.cancelTransfer() }   // no Esc: too easy to stop a transfer by accident
             case .done:
                 if !outgoing {

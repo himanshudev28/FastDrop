@@ -5,6 +5,8 @@ import Foundation
 //   fastdrop-cli hello <ip> [--port N]
 //   fastdrop-cli send <ip> [<file|folder>...] [--text "…"] [--crc] [--stop-after-mb N] [--port N] [--streams N] [--name NAME]
 //   fastdrop-cli recv [--dir DIR] [--port N] [--accept ask|trusted|everyone | --auto] [--crc] [--name NAME] [--no-discovery]
+//   send and recv also take --ctl-test "SECONDS:ACTION[,SECONDS:ACTION...]" (ACTION = pause | resume | skip=N; SECONDS
+//   counted from when DATA starts flowing): each action is applied locally and sent as a control message.
 //   fastdrop-cli trust list | trust remove <id>
 //   fastdrop-cli selftest
 //   (all: --state-dir DIR keeps device id, trust keys and resume records in DIR)
@@ -61,6 +63,32 @@ func watch(_ t: Transfer) {
     print("\n\(t.state.rawValue.uppercased()): \(t.message) — \(Fmt.bytes(t.total)) total, \(Fmt.bytes(moved)) moved this session (\(moved) bytes) in \(String(format: "%.2f", secs))s, avg \(Fmt.speed(Double(moved) / max(secs, 0.001)))")
 }
 
+/// `--ctl-test`: logs every control message and runs the scripted actions once the transfer is up.
+let ctlPlan: [(at: Double, action: CtlMessage)]? = {
+    guard let s = option("--ctl-test") else { return nil }
+    guard let p = CtlTestPlan.parse(s) else { die("--ctl-test \"SECONDS:ACTION[,SECONDS:ACTION...]\" with ACTION = pause | resume | skip=N") }
+    return p
+}()
+
+func armCtl(_ t: Transfer) {
+    t.onControl = { msg, sent in print("\nctl \(sent ? "->" : "<-") \(msg)") }
+    guard let plan = ctlPlan else { return }
+    if !t.ctlOn { print("\nctl: not negotiated with the peer; --ctl-test actions will do nothing") }
+    Thread {
+        let start = Date()
+        for step in plan {
+            let wait = step.at - Date().timeIntervalSince(start)
+            if wait > 0 { Thread.sleep(forTimeInterval: wait) }
+            guard t.running else { return }
+            switch step.action {
+            case .pause: t.setPaused(true)
+            case .resume: t.setPaused(false)
+            case .skip(let i): t.skipFile(i)
+            }
+        }
+    }.start()
+}
+
 switch cmd {
 case "hello":
     guard let ip = args.first else { die("hello <ip>") }
@@ -87,7 +115,8 @@ case "send":
     var watcher: Thread?
     job.onStart = { t in
         let resumed = t.baseline > 0 ? ", resuming at \(Fmt.bytes(t.baseline))" : ""
-        print("ACCEPTED — \(text != nil ? "text" : "\(items.count) file(s)"), \(Fmt.bytes(t.total)), \(streams) streams\(resumed)\(t.crcOn ? ", CRC32 on" : "")")
+        print("ACCEPTED — \(text != nil ? "text" : "\(items.count) file(s)"), \(Fmt.bytes(t.total)), \(streams) streams\(resumed)\(t.crcOn ? ", CRC32 on" : "")\(t.ctlOn ? ", ctl on" : "")")
+        armCtl(t)
         watcher = Thread { watch(t) }; watcher?.start()
     }
     if let err = job.run() { die(err) }
@@ -119,7 +148,8 @@ case "recv":
     rx.onSaved = { url, _, size in print("\n  saved \(url.path) (\(Fmt.bytes(size)))") }
     rx.onStart = { t in
         let resumed = t.baseline > 0 ? ", resuming at \(Fmt.bytes(t.baseline))" : ""
-        print("\n  receiving \(Fmt.bytes(t.total))\(resumed)\(t.crcOn ? ", CRC32 on" : "")")
+        print("\n  receiving \(Fmt.bytes(t.total))\(resumed)\(t.crcOn ? ", CRC32 on" : "")\(t.ctlOn ? ", ctl on" : "")")
+        armCtl(t)
         Thread { watch(t) }.start()
     }
     rx.start()

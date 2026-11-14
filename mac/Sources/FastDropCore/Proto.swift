@@ -18,7 +18,7 @@ public enum Proto {
     public static let magicData: Int32 = 0x4644_4431   // "FDD1"
     public static let magicHello: Int32 = 0x4644_4831  // "FDH1"
 
-    public static let caps = ["text", "resume", "trust", "crc"]
+    public static let caps = ["text", "resume", "trust", "crc", "ctl"]
     public static let chunk = 8 << 20          // 8 MB work units shared by the parallel streams
     public static let socketBuffer = 4 << 20   // big TCP windows for fast Wi-Fi
     public static let ioBuffer = 1 << 20
@@ -115,6 +115,12 @@ public final class Sock: @unchecked Sendable {
         var tv = timeval(tv_sec: Int(seconds), tv_usec: Int32((seconds - floor(seconds)) * 1_000_000))
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+    }
+
+    /// Read timeout only (0 = block forever); writes keep their own timeout.
+    public func setReadTimeout(_ seconds: TimeInterval) {
+        var tv = timeval(tv_sec: Int(seconds), tv_usec: Int32((seconds - floor(seconds)) * 1_000_000))
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
     }
 
     // MARK: reading
