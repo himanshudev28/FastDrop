@@ -16,6 +16,9 @@
     <string name="send_nothing_meta">Choose what to send first.</string>
     <string name="send_remove">Remove %1$s</string>
     <string name="send_clear_all">Clear all</string>
+    <string name="send_removed">Removed %1$s</string>
+    <string name="send_cleared">Selection cleared</string>
+    <string name="send_undo">Undo</string>
     <string name="send_show_all">Show all %1$d</string>
     <string name="send_show_less">Show less</string>
     <plurals name="send_text_chars">

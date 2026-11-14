@@ -411,18 +411,43 @@ class SendScreen(host: MainActivity) : Screen(host) {
 
     /** Removes one line of the selection (a file, a folder, or an app with all its APKs). */
     private fun removeRow(r: SelRow, index: Int) {
+        val before = Hub.selection
         val drop = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<SendItem, Boolean>())
         drop.addAll(r.items)
-        Hub.selection = Hub.selection.filter { it !in drop }
+        val after = before.filter { it !in drop }
+        Hub.selection = after
         refocusSel = index
         refresh()
+        offerUndo(s(R.string.send_removed, r.title), before, null, after, index)
     }
 
     private fun clearAll() {
+        val before = Hub.selection
+        val beforeText = Hub.selectionText
         clearSelection()
+        val after = Hub.selection
         listExpanded = false
         refocusSel = 0          // focus lands on Choose (see refreshSelection)
         refresh()
+        offerUndo(s(R.string.send_cleared), before, beforeText, after, 0)
+    }
+
+    /** Only the latest removal is undoable, and only while the selection is still exactly what that removal left. */
+    private var undoToken = Any()
+
+    private fun offerUndo(msg: String, before: List<SendItem>, beforeText: String?, after: List<SendItem>, focusIndex: Int) {
+        val token = Any()
+        undoToken = token
+        host.toast(msg, 0, s(R.string.send_undo)) {
+            if (undoToken !== token || !shown) return@toast
+            undoToken = Any()
+            // Changed another way since (picked more, edited text, started a send)? Then leave it alone.
+            if (Hub.selection !== after || Hub.selectionText != null) return@toast
+            Hub.selection = before
+            if (beforeText != null) Hub.selectionText = beforeText
+            refocusSel = focusIndex
+            refresh()
+        }
     }
 
     private fun typeText(initial: String = "") {
@@ -543,6 +568,7 @@ class SendScreen(host: MainActivity) : Screen(host) {
 
     override fun onHide() {
         shown = false
+        undoToken = Any()
         Links.stopNearby()
         Links.stopHosting("send")
         sheet?.dismiss(); sheet = null

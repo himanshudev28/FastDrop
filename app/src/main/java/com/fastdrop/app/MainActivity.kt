@@ -331,9 +331,9 @@ class MainActivity : Activity(), Hub.Listener {
 
     // ---------------------------------------------------------------- public API for screens
 
-    fun toast(msg: String, kind: Int = 0) {
+    fun toast(msg: String, kind: Int = 0, action: String? = null, onAction: (() -> Unit)? = null) {
         if (!::root.isInitialized) return
-        Ui.snackbar(root, msg, kind)
+        Ui.snackbar(root, msg, kind, action = action, onAction = onAction)
     }
 
     fun copyText(label: String, text: String) {
