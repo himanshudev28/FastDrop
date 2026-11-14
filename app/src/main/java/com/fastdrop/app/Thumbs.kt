@@ -154,7 +154,8 @@ object Thumbs {
         d.setTint(p.on)
         android.graphics.drawable.LayerDrawable(arrayOf(
             android.graphics.drawable.ColorDrawable(p.fill),
-            InsetDrawable(d, 0.28f)
+            // The fractional inset is API 26+; older Android (minSdk 21) gets a fixed one.
+            if (Build.VERSION.SDK_INT >= 26) InsetDrawable(d, 0.28f) else InsetDrawable(d, Theme.dp(ctx, 10))
         ))
     } catch (_: Exception) { null }
 
