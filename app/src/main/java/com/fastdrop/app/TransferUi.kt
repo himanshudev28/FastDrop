@@ -142,6 +142,12 @@ class TransferUi(private val host: MainActivity) {
         private val listBox = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         /** Tick per listed file row, by file index; shown once that file is finished. */
         private val rowTicks = ArrayList<View>()
+        /** Per listed row: skip button (unfinished files, when the peer supports it) and "Skipped" label. */
+        private val rowSkips = ArrayList<View>()
+        private val rowSkipped = ArrayList<View>()
+        /** Pause state and control support the action row was built for. */
+        private var actionsPaused = false
+        private var actionsCtl = false
         private var tickFor: Transfer? = null
         private val extras = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -276,7 +282,8 @@ class TransferUi(private val host: MainActivity) {
                 }
                 Mode.RUN -> {
                     if (t == null) return
-                    if (modeChanged || keyChanged || Sender.queued != actionsQueued) buildActions(newMode, t)
+                    if (modeChanged || keyChanged || Sender.queued != actionsQueued ||
+                        t.paused != actionsPaused || t.canControl != actionsCtl) buildActions(newMode, t)
                     val job = if (t.outgoing) Job.SEND else Job.RECEIVE
                     panel.setJob(job)
                     panel.setBang(false)
@@ -284,21 +291,22 @@ class TransferUi(private val host: MainActivity) {
                     val done = t.done.get()          // includes bytes the receiver already had (resume)
                     val frac = if (t.total > 0) (done.toDouble() / t.total).toFloat().coerceIn(0f, 1f) else 0f
                     val base = if (t.resumed && t.total > 0) (t.baseline.toDouble() / t.total).toFloat() else -1f
-                    val speed = smooth(t, done)
+                    val speed = if (t.paused) { speedFor = null; 0.0 } else smooth(t, done)
                     lastSpeed = speed; lastFrac = frac
-                    val eta = if (speed > 1 && t.total > 0) Io.duration(((t.total - done) / speed).toLong()) else null
+                    val eta = if (speed > 1 && t.total > 0) Io.duration(((t.total - done).coerceAtLeast(0) / speed).toLong()) else null
                     showSpeed(speed)
                     panel.meter.setProgress(frac, base)
                     setIf(panel.percent, pct(frac))
-                    val title = str(if (t.outgoing) R.string.title_sending else R.string.title_receiving, t.peer)
+                    val going = str(if (t.outgoing) R.string.title_sending else R.string.title_receiving, t.peer)
+                    val title = if (t.paused) str(R.string.title_paused, going) else going
                     setIf(panel.title, title)
                     announce(t, title, frac, eta)
-                    setIf(panel.meta, str(R.string.progress_of, Io.bytes(done), Io.bytes(t.total)) +
-                        (if (eta != null) " · " + str(R.string.eta_left, eta) else ""))
+                    setIf(panel.meta, str(R.string.progress_of, Io.bytes(done.coerceAtMost(t.total)), Io.bytes(t.total)) +
+                        (if (eta != null && !t.paused) " · " + str(R.string.eta_left, eta) else ""))
                     val resumed = if (t.resumed) str(R.string.resumed_at, (base * 100).toInt().coerceAtLeast(0)) else null
                     val fileOf = if (t.files > 1 && t.text == null)
-                        str(R.string.transfer_file_of, (t.finishedFiles.size + 1).coerceAtMost(t.files), t.files) else null
-                    setIf(panel.note, listOfNotNull(Hub.multiInfo, fileOf, resumed, queuedNote()).joinToString(" · "))
+                        str(R.string.transfer_file_of, (t.finishedFiles.size + t.skippedFiles.size + 1).coerceAtMost(t.files), t.files) else null
+                    setIf(panel.note, listOfNotNull(Hub.multiInfo, fileOf, skippedNote(t), resumed, queuedNote()).joinToString(" · "))
                     showTicks(t)
                     setIf(panel.body, "")
                     // Decide once, 5 s in, so the hint doesn't flicker.
@@ -331,7 +339,7 @@ class TransferUi(private val host: MainActivity) {
                     })
                     setIf(panel.meta, str(R.string.done_in, Io.bytes(moved), Io.duration(ms / 1000)))
                     showTicks(t)
-                    setIf(panel.note, ""); setIf(panel.body, "")
+                    setIf(panel.note, skippedNote(t) ?: ""); setIf(panel.body, "")
                     panel.hide.visibility = View.GONE
                     tip.visibility = View.GONE
                 }
@@ -437,17 +445,26 @@ class TransferUi(private val host: MainActivity) {
         private fun showTicks(t: Transfer) {
             if (t !== tickFor) return
             val all = t.state == State.DONE
-            for ((i, v) in rowTicks.withIndex()) {
-                val on = all || i in t.finishedFiles
-                val want = if (on) View.VISIBLE else View.INVISIBLE
-                if (v.visibility != want) v.visibility = want
+            val ctl = t.canControl
+            fun show(v: View?, on: Boolean, off: Int = View.GONE) { val w = if (on) View.VISIBLE else off; if (v != null && v.visibility != w) v.visibility = w }
+            for ((i, tick) in rowTicks.withIndex()) {
+                val skipped = i in t.skippedFiles
+                val finished = i in t.finishedFiles || (all && !skipped)
+                show(tick, finished)
+                show(rowSkipped.getOrNull(i), skipped)
+                show(rowSkips.getOrNull(i), ctl && !finished && !skipped)
             }
+        }
+
+        /** "2 skipped" when files were dropped from this transfer. */
+        private fun skippedNote(t: Transfer): String? = t.skippedFiles.size.takeIf { it > 0 }?.let {
+            ctx.resources.getQuantityString(R.plurals.skipped_n, it, it)
         }
 
         /** The file rows under the panel: names (sizes when known), first few only. */
         private fun bindNames(t: Transfer?) {
             listBox.removeAllViews()
-            rowTicks.clear()
+            rowTicks.clear(); rowSkips.clear(); rowSkipped.clear()
             tickFor = t
             val list = t?.names?.takeIf { it.isNotEmpty() } ?: Hub.sentItems.map { it.name }
             if (list.isEmpty()) return
@@ -457,7 +474,7 @@ class TransferUi(private val host: MainActivity) {
             for (s in known) sizes[s.name] = s.size
             val shown = list.take(5)
             val g = Ui.gutter(ctx)
-            shown.forEach { n ->
+            shown.forEachIndexed { idx, n ->
                 val row = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
@@ -479,9 +496,18 @@ class TransferUi(private val host: MainActivity) {
                     row.addView(Ui.mono(ctx, Io.bytes(it)), LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(12) })
                 }
                 if (t != null && t.text == null) {
-                    val tick = Ui.icon(ctx, R.drawable.ic_check, Theme.TXT_OK, 18).apply { visibility = View.INVISIBLE }
-                    row.addView(tick, LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginStart = dp(12) })
-                    rowTicks.add(tick)
+                    // One trailing slot: tick (finished), skip button (still to come), or "Skipped".
+                    val slot = FrameLayout(ctx)
+                    val tick = Ui.icon(ctx, R.drawable.ic_check, Theme.TXT_OK, 18).apply { visibility = View.GONE }
+                    slot.addView(tick, FrameLayout.LayoutParams(dp(18), dp(18), Gravity.CENTER))
+                    val name = n.substringAfterLast('/')
+                    val skip = Ui.iconButton(ctx, R.drawable.ic_close, str(R.string.cd_skip_file, name)) { t.userSkip(idx) }
+                        .apply { visibility = View.GONE }
+                    slot.addView(skip, FrameLayout.LayoutParams(skip.layoutParams.width, skip.layoutParams.height, Gravity.CENTER))
+                    val gone = Ui.mono(ctx, str(R.string.label_skipped)).apply { visibility = View.GONE }
+                    slot.addView(gone, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+                    row.addView(slot, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(8) })
+                    rowTicks.add(tick); rowSkips.add(skip); rowSkipped.add(gone)
                 }
                 listBox.addView(row, LinearLayout.LayoutParams(-1, -2))
             }
@@ -536,6 +562,8 @@ class TransferUi(private val host: MainActivity) {
 
         private fun buildActions(m: Mode, t: Transfer?) {
             actionsQueued = Sender.queued
+            actionsPaused = t?.paused == true
+            actionsCtl = t?.canControl == true
             actions.removeAllViews()
             extras.removeAllViews()
             extras.visibility = View.GONE
@@ -551,6 +579,11 @@ class TransferUi(private val host: MainActivity) {
                     }
                     add(cancel, true)
                     focus = cancel
+                    if (m == Mode.RUN && t != null && t.canControl) {
+                        val p = t.paused
+                        add(Ui.jobButton(ctx, str(if (p) R.string.action_resume else R.string.action_pause),
+                            if (t.outgoing) Job.SEND else Job.RECEIVE, null) { t.userPause(!p) }, false)
+                    }
                     if (Sender.queued > 0) add(Ui.quietButton(ctx, str(R.string.action_clear_queue), danger = true) { Sender.clearQueue() }, false)
                 }
                 Mode.DONE -> {

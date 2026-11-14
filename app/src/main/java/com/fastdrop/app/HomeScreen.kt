@@ -455,7 +455,8 @@ class HomeScreen(host: MainActivity) : Screen(host) {
                 val el = (SystemClock.elapsedRealtime() - t.startedAt).coerceAtLeast(1)
                 val sp = t.sessionDone * 1000.0 / el
                 val pct = (frac * 100).toInt()
-                meta = if (sp > 1 && t.total > 0) s(R.string.strip_meta, pct, Io.duration(((t.total - done) / sp).toLong()))
+                meta = if (t.paused) s(R.string.title_paused, "$pct %")
+                else if (sp > 1 && t.total > 0) s(R.string.strip_meta, pct, Io.duration(((t.total - done).coerceAtLeast(0) / sp).toLong()))
                 else s(R.string.strip_meta_noeta, pct)
             }
             pending != null -> {

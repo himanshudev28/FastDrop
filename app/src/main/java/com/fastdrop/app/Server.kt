@@ -65,6 +65,11 @@ object Server {
     }
 
     /** Returns false if the sender is already gone. [extra] fields (protocol 2) are merged into the reply. */
+    /** CTRL writes from the UI (control messages) and from the session (final message) never interleave. */
+    private fun sendCtl(ch: SocketChannel, m: JSONObject) {
+        try { synchronized(ch) { Io.writeJson(ch, m) } } catch (_: Exception) { }
+    }
+
     private fun reply(ch: SocketChannel, accept: Boolean, reason: String, v2: Boolean = false, extra: JSONObject? = null): Boolean {
         val o = JSONObject().put("accept", accept).put("reason", reason)
         if (v2) o.put("v", ProtoV2.VERSION).put("dev", Hub.myId)
@@ -191,6 +196,12 @@ object Server {
                 for ((i, r) in have) h.put(i.toString(), JSONArray(ProtoV2.Ranges.encode(r)))
             })
             if (crc) extra.put("crc", true)
+            val ctl = v2 && o.optBoolean("ctl")              // pause / resume / skip (protocol section 7)
+            if (ctl) {
+                extra.put("ctl", true)
+                t.applySkipLocal = { i -> s.skip(i) }
+                t.control = { m -> sendCtl(ch, m) }
+            }
             Hub.begin(t)
             reserved = false             // the transfer owns the busy flag now; Hub.end releases it
             if (!reply(ch, true, "", v2, extra)) {
@@ -200,11 +211,23 @@ object Server {
                 return
             }
             val checkpoint = timer.scheduleWithFixedDelay({ try { s.checkpoint() } catch (_: Exception) { } }, 10, 10, TimeUnit.SECONDS)
+            if (ctl) thread(name = "ctl-read", isDaemon = true) {
+                try { while (t.running) t.onControl(Io.readJson(ch)) } catch (_: Exception) { }
+            }
             try {
                 s.start()
                 while (!s.complete && t.running) s.waitDone(500)
                 if (s.complete && t.running) {
-                    try { Io.writeJson(ch, JSONObject().put("ok", true)) } catch (_: Exception) { }
+                    val skippedNow = s.skippedList()
+                    if (skippedNow.isNotEmpty()) {
+                        // Frames for a skipped file may still be on the way: let the sender's streams end
+                        // (it sends the end marker) before we answer and close them.
+                        val until = android.os.SystemClock.elapsedRealtime() + 15_000
+                        while (s.streams.get() > 0 && t.running && android.os.SystemClock.elapsedRealtime() < until) Thread.sleep(50)
+                    }
+                    val fin = JSONObject().put("ok", true)
+                    if (skippedNow.isNotEmpty()) fin.put("skipped", JSONArray(skippedNow))
+                    sendCtl(ch, fin)
                     Hub.end(t, State.DONE, str(R.string.msg_received))
                 }
             } catch (e: Exception) {
@@ -231,6 +254,7 @@ object Server {
         guard.cancel(false)   // from here the transfer watchdog handles stalls
         val t = s.t
         t.register(ch)
+        s.streams.incrementAndGet()
 
         val hdr = ByteBuffer.allocate(16)
         // CRC off: the original zero-extra-work loop with a direct buffer. CRC on: a heap buffer we can checksum.
@@ -245,6 +269,7 @@ object Server {
                 if (fi < 0) break
                 if (fi >= s.files.size || off < 0 || len < 0 || off > s.files[fi].size - len) throw IOException("bad frame")
                 if (!s.frameOk(fi, off, len)) throw IOException("bad frame")
+                if (s.isSkipped(fi)) { discard(ch, buf, len.toLong(), crc, tail); continue }
                 val fc = s.sink(fi).channel
                 var pos = off
                 var rem = len.toLong()
@@ -284,7 +309,26 @@ object Server {
             }
         } finally {
             // A stream ending cleanly is normal (others may still be sending); real stalls hit the watchdog.
+            s.streams.decrementAndGet()
             Io.closeQuietly(ch)
+        }
+    }
+
+    /** Reads a frame for a skipped file and throws the payload away (its CRC is still checked when on). */
+    private fun discard(ch: SocketChannel, buf: ByteBuffer, len: Long, crc: CRC32?, tail: ByteBuffer) {
+        crc?.reset()
+        var rem = len
+        while (rem > 0) {
+            buf.clear()
+            if (rem < buf.capacity()) buf.limit(rem.toInt())
+            val n = ch.read(buf)
+            if (n < 0) throw EOFException("Sender disconnected")
+            if (crc != null) crc.update(buf.array(), 0, n)
+            rem -= n
+        }
+        if (crc != null) {
+            tail.clear(); Io.readFully(ch, tail); tail.flip()
+            if ((tail.int.toLong() and 0xffffffffL) != crc.value) throw DataCheckException()
         }
     }
 }
@@ -305,6 +349,27 @@ class RxSession(
     private val remaining = AtomicInteger(files.size)
     private val lock = Object()
     @Volatile var complete = false
+    /** Files dropped by either side (protocol section 7); guarded by recLock together with [finished]. */
+    private val skipped = BooleanArray(files.size)
+    /** DATA connections still open for this session (the receiver waits for them before its final message after a skip). */
+    val streams = AtomicInteger()
+
+    fun isSkipped(i: Int) = synchronized(recLock) { skipped[i] }
+
+    fun skippedList(): List<Int> = synchronized(recLock) { files.indices.filter { skipped[it] } }
+
+    /** Drops file [i] unless it is already complete. Its partial and resume record go at closeOut(). */
+    fun skip(i: Int): Boolean {
+        if (i !in files.indices) return false
+        synchronized(recLock) { if (finished[i] || skipped[i]) return false; skipped[i] = true }
+        t.skippedFiles.add(i)
+        t.total = (t.total - (files[i].size - got[i].get()).coerceAtLeast(0L)).coerceAtLeast(t.done.get())
+        if (remaining.decrementAndGet() == 0) {
+            complete = true
+            synchronized(lock) { lock.notifyAll() }
+        }
+        return true
+    }
     @Volatile private var aborted = false
 
     /**
@@ -371,6 +436,7 @@ class RxSession(
     }
 
     fun chunkDone(i: Int, off: Long, len: Long) {
+        if (isSkipped(i)) return
         if (keys[i] != null) {
             // A chunk counts once, even if a sender repeats it.
             if (!doneChunks[i].add((off / Proto.CHUNK).toInt())) return
@@ -380,7 +446,7 @@ class RxSession(
 
     private fun finishFile(i: Int) {
         val s = synchronized(sinks) { sinks[i] } ?: return
-        synchronized(recLock) { if (finished[i]) return; finished[i] = true }
+        synchronized(recLock) { if (finished[i] || skipped[i]) return; finished[i] = true }
         val uri = try { s.finish() } catch (_: Exception) {
             // Keep the resume record (the data is all there); closeOut() re-saves it. No "Received" entry.
             synchronized(recLock) { finished[i] = false }
@@ -420,7 +486,7 @@ class RxSession(
     /** Called about every 10 s while running so a killed app can still resume. */
     fun checkpoint() {
         for (i in files.indices) {
-            if (keys[i] == null || aborted || synchronized(recLock) { finished[i] }) continue
+            if (keys[i] == null || aborted || synchronized(recLock) { finished[i] || skipped[i] }) continue
             if (doneChunks[i].count() > 0) record(i)
         }
     }
@@ -432,6 +498,12 @@ class RxSession(
     fun closeOut() {
         synchronized(sinks) { aborted = true }
         for (i in files.indices) {
+            if (synchronized(recLock) { skipped[i] }) {
+                // Skipped: no partial and no resume record survive.
+                synchronized(sinks) { sinks[i] }?.abort()
+                keys[i]?.let { Resume.remove(it) }
+                continue
+            }
             val s = synchronized(sinks) { sinks[i] } ?: continue
             if (synchronized(recLock) { finished[i] }) continue
             val key = keys[i]

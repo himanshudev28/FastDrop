@@ -84,12 +84,14 @@ enum class State { RUNNING, DONE, FAILED, CANCELLED }
 
 /** One transfer in either direction. Progress is a lock-free counter read by the UI. */
 class Transfer(
-    val outgoing: Boolean, val peer: String, val total: Long, val files: Int,
+    val outgoing: Boolean, val peer: String, total: Long, val files: Int,
     val via: String = Device.VIA_LAN,              // how the link was made, for the UI ("Wi-Fi Direct")
     val names: List<String> = emptyList(),         // file names, for the UI (first few shown)
     val text: String? = null,                      // outgoing text transfer (for Retry)
 ) {
     val done = AtomicLong()
+    /** Bytes this transfer will move; shrinks when a file is skipped (protocol section 7). */
+    @Volatile var total: Long = total
     /** Bytes that were already on the receiver when this session began (resume). Speed/ETA ignore them. */
     @Volatile var baseline = 0L
     val resumed: Boolean get() = baseline > 0
@@ -116,7 +118,53 @@ class Transfer(
     /** Once per finished chunk (not per write), so it costs nothing measurable. */
     fun chunkSent(file: Int, len: Long) {
         val left = fileLeft ?: return
-        if (left.addAndGet(file, -len) <= 0L) finishedFiles.add(file)
+        if (left.addAndGet(file, -len) <= 0L && file !in skippedFiles) finishedFiles.add(file)
+    }
+
+    // ---- pause / resume / skip (protocol section 7, capability "ctl")
+
+    /** Files dropped from this transfer by either side. */
+    val skippedFiles: MutableSet<Int> = java.util.Collections.newSetFromMap(ConcurrentHashMap<Int, Boolean>())
+    /** Paused by either side (one shared state: the latest pause / resume wins). */
+    @Volatile var paused = false
+        private set
+    /** Sends a control message to the peer; non-null only when both sides negotiated "ctl". */
+    @Volatile var control: ((JSONObject) -> Unit)? = null
+    /** Applies a skip on this side (sender: stop queuing; receiver: drop the file). True if it took effect. */
+    @Volatile var applySkipLocal: ((Int) -> Boolean)? = null
+
+    val canControl: Boolean get() = control != null && running
+
+    fun setPaused(p: Boolean) {
+        if (paused == p) return
+        paused = p
+        lastProgressAt = SystemClock.elapsedRealtime()      // the watchdog restarts from now
+        Hub.changed()
+    }
+
+    /** The user pressed Pause / Resume here. */
+    fun userPause(p: Boolean) {
+        if (!canControl || paused == p) return
+        setPaused(p)
+        control?.invoke(JSONObject().put("t", if (p) "pause" else "resume"))
+    }
+
+    /** The user dropped file [i] here. */
+    fun userSkip(i: Int) {
+        if (!canControl) return
+        if (applySkipLocal?.invoke(i) == true) {
+            control?.invoke(JSONObject().put("t", "skip").put("file", i))
+            Hub.changed()
+        }
+    }
+
+    /** A control message from the peer. Unknown types are ignored. */
+    fun onControl(m: JSONObject) {
+        when (m.optString("t")) {
+            "pause" -> setPaused(true)
+            "resume" -> setPaused(false)
+            "skip" -> if (applySkipLocal?.invoke(m.optInt("file", -1)) == true) Hub.changed()
+        }
     }
     private val closeables = CopyOnWriteArrayList<Closeable>()
 
@@ -413,7 +461,8 @@ object Hub {
                 val pct = if (t.total > 0) t.done.get() * 100 / t.total else 100
                 val secs = (SystemClock.elapsedRealtime() - t.startedAt) / 1000.0
                 val sp = if (secs > 0) t.sessionDone / secs else 0.0
-                app.getString(R.string.msg_status_running, dir, t.peer, pct, Io.speed(sp))
+                if (t.paused) app.getString(R.string.title_paused, "$dir ${t.peer} • $pct%")
+                else app.getString(R.string.msg_status_running, dir, t.peer, pct, Io.speed(sp))
             }
             State.DONE -> if (t.text != null || (t.files == 0 && t.total == 0L)) app.getString(if (t.outgoing) R.string.msg_text_sent_to else R.string.msg_text_from, t.peer)
             else app.getString(if (t.outgoing) R.string.msg_done_sent else R.string.msg_done_from, t.files, Io.bytes(t.total), t.peer)
@@ -458,7 +507,7 @@ object Hub {
                 Thread.sleep(1000)
                 val t = transfer ?: continue
                 if (!t.running) continue
-                if (!t.sentAll && SystemClock.elapsedRealtime() - t.lastProgressAt > 30_000) {
+                if (!t.sentAll && !t.paused && SystemClock.elapsedRealtime() - t.lastProgressAt > 30_000) {
                     end(t, State.FAILED, app.getString(R.string.msg_no_data_30s))
                 } else {
                     TransferService.update(app, statusLine(t))

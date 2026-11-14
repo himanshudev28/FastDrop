@@ -173,6 +173,7 @@ object Sender {
                 .put("v", ProtoV2.VERSION).put("dev", Hub.myId).put("ts", ts).put("chunk", ProtoV2.CHUNK)
                 .put("files", files)
             if (text != null) offer.put("text", text)
+            else offer.put("ctl", true)                   // pause / resume / skip (protocol section 7)
             if (wantCrc) offer.put("crc", true)
             if (key != null) offer.put("auth", ProtoV2.auth(key, id, Hub.myId, ts, items.map { it.name to it.size }, text))
             // First-time senders (no key yet) show the code so the receiver can confirm who is asking.
@@ -203,6 +204,7 @@ object Sender {
                 if (rid.isNotEmpty() && ProtoV2.isHex64(trust)) Trust.setKeyFor(rid, trust)
             }
             val useCrc = wantCrc && peerV2 && resp.optBoolean("crc")
+            val useCtl = peerV2 && text == null && resp.optBoolean("ctl")
             // Chunks the receiver already has (resume).
             val have = HashMap<Int, List<IntArray>>()
             if (peerV2) resp.optJSONObject("have")?.let { h ->
@@ -250,6 +252,7 @@ object Sender {
                 if (todo == 0L) tr.finishedFiles.add(i)          // empty, or already on the receiver (resume)
             }
             tr.fileLeft = left
+            val fin = if (useCtl) startControl(tr, ctrl, inp, out, items) else null
             val n = minOf(Hub.streams.coerceIn(1, 8), queue.size)
             val error = AtomicReference<Exception?>()
             val workers = (0 until n).map {
@@ -266,9 +269,16 @@ object Sender {
             if (!tr.running) return false                 // cancelled / stalled; already reported
             error.get()?.let { throw it }
 
-            ctrl.soTimeout = 60_000
-            val fin = Io.readJson(inp)
-            if (fin.optBoolean("ok")) { success = true; Hub.end(tr, State.DONE, str(R.string.msg_sent)) }
+            val done = if (fin != null) {
+                // The control reader receives the final message; give the receiver 60 s to finish up.
+                if (!fin.latch.await(60, java.util.concurrent.TimeUnit.SECONDS)) throw java.net.SocketTimeoutException()
+                fin.msg ?: throw IOException(str(R.string.msg_connection_lost))
+            } else {
+                ctrl.soTimeout = 60_000
+                Io.readJson(inp)
+            }
+            done.optJSONArray("skipped")?.let { a -> for (k in 0 until a.length()) tr.skippedFiles.add(a.optInt(k)) }
+            if (done.optBoolean("ok")) { success = true; Hub.end(tr, State.DONE, str(R.string.msg_sent)) }
             else Hub.end(tr, State.FAILED, str(R.string.msg_receiver_error))
         } catch (e: Exception) {
             val msg = when {
@@ -295,6 +305,42 @@ object Sender {
         return success
     }
 
+    /** The receiver's final message, handed over by the control reader. */
+    private class Fin { val latch = java.util.concurrent.CountDownLatch(1); @Volatile var msg: JSONObject? = null }
+
+    /**
+     * Protocol section 7: CTRL becomes full duplex. A reader takes pause / resume / skip and the final
+     * {"ok"} message; writes go through one thread so they never interleave. No read timeout: stalls are
+     * the data watchdog's job (and it ignores paused time).
+     */
+    private fun startControl(tr: Transfer, ctrl: Socket, inp: DataInputStream, out: DataOutputStream, items: List<SendItem>): Fin {
+        val fin = Fin()
+        val writer = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "ctl-write").apply { isDaemon = true } }
+        tr.control = { m -> try { writer.execute { try { Io.writeJson(out, m) } catch (_: Exception) { } } } catch (_: Exception) { } }
+        tr.register(java.io.Closeable { writer.shutdownNow() })
+        tr.applySkipLocal = { i ->
+            if (i !in items.indices || i in tr.finishedFiles || !tr.skippedFiles.add(i)) false
+            else {
+                // Bytes of this file not written yet no longer count (an in-flight chunk still finishes).
+                val left = tr.fileLeft?.get(i) ?: 0L
+                tr.total = (tr.total - left.coerceAtLeast(0L)).coerceAtLeast(tr.done.get())
+                true
+            }
+        }
+        ctrl.soTimeout = 0
+        thread(name = "ctl-read", isDaemon = true) {
+            try {
+                while (true) {
+                    val m = Io.readJson(inp)
+                    if (m.has("ok")) { fin.msg = m; break }
+                    tr.onControl(m)
+                }
+            } catch (_: Exception) {
+            } finally { fin.latch.countDown() }
+        }
+        return fin
+    }
+
     private fun worker(
         ctx: Context, dev: Device, id: String, items: List<SendItem>,
         queue: ConcurrentLinkedQueue<Chunk>, t: Transfer, crcOn: Boolean,
@@ -319,7 +365,9 @@ object Sender {
             val crcBuf = if (crcOn) ByteBuffer.allocate(Proto.IO_BUF) else null
             var cur = -1
             while (t.running) {
+                while (t.paused && t.running) Thread.sleep(50)          // pause: between frames only
                 val c = queue.poll() ?: break
+                if (c.file in t.skippedFiles) continue                  // dropped by either side
                 if (c.file != cur) {
                     src?.close()
                     src = Storage.openSource(ctx, items[c.file])

@@ -42,6 +42,15 @@
     <string name="eta_left">%1$s left</string>
     <string name="resumed_at">Resumed at %1$d %%</string>
     <string name="transfer_file_of">File %1$d of %2$d</string>
+    <string name="title_paused">Paused · %1$s</string>
+    <string name="action_pause">Pause</string>
+    <string name="action_resume">Resume</string>
+    <string name="cd_skip_file">Skip %1$s</string>
+    <string name="label_skipped">Skipped</string>
+    <plurals name="skipped_n">
+        <item quantity="one">%1$d skipped</item>
+        <item quantity="other">%1$d skipped</item>
+    </plurals>
     <string name="title_sent">Sent to %1$s</string>
     <string name="title_sent_text">Sent text to %1$s</string>
     <plurals name="title_saved">

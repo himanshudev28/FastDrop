@@ -14,7 +14,7 @@ object ProtoV2 {
     const val CHUNK = 8388608
     const val MAX_TEXT = 100_000
     const val TS_WINDOW_MS = 24L * 3600 * 1000
-    val CAPS = listOf("text", "resume", "trust", "crc")
+    val CAPS = listOf("text", "resume", "trust", "crc", "ctl")
 
     private val HEX = "0123456789abcdef".toCharArray()
 
