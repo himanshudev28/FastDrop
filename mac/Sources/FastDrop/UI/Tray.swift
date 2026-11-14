@@ -7,6 +7,8 @@ struct BottomTray: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var scheme
+    @State private var showAll = false
+    private static let collapsedCount = 4
 
     var body: some View {
         ZStack {
@@ -63,14 +65,7 @@ struct BottomTray: View {
             }
             .frame(minWidth: 60, alignment: .leading)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(model.picked) { f in
-                        Chip(file: f).transition(.scale(scale: 0.5).combined(with: .opacity))
-                    }
-                }
-                .padding(.vertical, 6)
-            }
+            chips
 
             VStack(alignment: .trailing, spacing: 8) {
                 HStack(spacing: 8) {
@@ -97,6 +92,38 @@ struct BottomTray: View {
         .shadow(color: .black.opacity(0.14), radius: 14, y: 6)
     }
 
+    /// First 4 items, then "Show all N" / "Show less" (matches the Android Send screen).
+    @ViewBuilder private var chips: some View {
+        let files = model.picked
+        let overflow = files.count > Self.collapsedCount
+        if showAll && overflow {
+            VStack(alignment: .leading, spacing: 4) {
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10, alignment: .leading)], alignment: .leading, spacing: 10) {
+                        ForEach(files) { f in Chip(file: f).transition(.scale(scale: 0.5).combined(with: .opacity)) }
+                    }
+                    .padding(.vertical, 6)
+                }
+                .frame(maxHeight: 190)
+                Button("Show less") { withAnimation(Motion.pop(reduceMotion)) { showAll = false } }
+                    .buttonStyle(.link).font(.caption)
+            }
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(overflow ? Array(files.prefix(Self.collapsedCount)) : files) { f in
+                        Chip(file: f).transition(.scale(scale: 0.5).combined(with: .opacity))
+                    }
+                    if overflow {
+                        Button("Show all \(files.count)") { withAnimation(Motion.pop(reduceMotion)) { showAll = true } }
+                            .buttonStyle(.bordered).controlSize(.small)
+                    }
+                }
+                .padding(.vertical, 6)
+            }
+        }
+    }
+
     private struct Chip: View {
         let file: PickedFile
         @Environment(AppModel.self) private var model
@@ -116,10 +143,10 @@ struct BottomTray: View {
             .padding(8)
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.primary.opacity(0.06)))
             .overlay(alignment: .topTrailing) {
-                if hovering {
+                do {
                     Button { model.remove(file) } label: {
                         Image(systemName: "xmark.circle.fill").font(.body)
-                            .symbolRenderingMode(.palette).foregroundStyle(.white, .gray)
+                            .symbolRenderingMode(.palette).foregroundStyle(.white, .gray.opacity(hovering ? 1 : 0.75))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Remove \(file.name)")
