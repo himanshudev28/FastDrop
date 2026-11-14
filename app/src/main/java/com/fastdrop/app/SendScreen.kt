@@ -52,23 +52,23 @@ internal object ScreenKit {
         if (tv.text.toString() == s.toString()) return
         if (!Anim.on(tv.context) || !tv.isAttachedToWindow) { tv.text = s; return }
         tv.animate().cancel()
-        tv.animate().alpha(0f).setDuration(Theme.DUR_FAST / 2).withEndAction {
+        tv.animate().alpha(0f).setDuration(Theme.D_STATE / 2).withEndAction {
             tv.text = s
-            tv.animate().alpha(1f).setDuration(Theme.DUR_FAST).start()
+            tv.animate().alpha(1f).setDuration(Theme.D_STATE).start()
         }.start()
     }
 
     /** Status line for our own hosted link (text, colour). */
     fun hostStatus(ctx: Context): Pair<String, Int> = when (Links.hostState) {
         Links.HostState.STARTING ->
-            (if (Links.p2pSupported(ctx)) "Setting up Wi‑Fi Direct…" else "Setting up hotspot…") to Theme.WARNING
+            (if (Links.p2pSupported(ctx)) ctx.getString(R.string.send_host_setup_p2p) else ctx.getString(R.string.send_host_setup_hotspot)) to Theme.INK_2
         Links.HostState.READY -> when (Links.hostMode) {
-            JoinInfo.MODE_P2P -> "Ready · Wi‑Fi Direct" to Theme.SUCCESS
-            JoinInfo.MODE_HOTSPOT -> "Ready · Hotspot" to Theme.SUCCESS
-            else -> "Ready · same Wi‑Fi" to Theme.SUCCESS
+            JoinInfo.MODE_P2P -> ctx.getString(R.string.send_host_ready_p2p) to Job.OK.text
+            JoinInfo.MODE_HOTSPOT -> ctx.getString(R.string.send_host_ready_hotspot) to Job.OK.text
+            else -> ctx.getString(R.string.send_host_ready_lan) to Job.OK.text
         }
-        Links.HostState.FAILED -> "Same Wi‑Fi only" to Theme.WARNING
-        Links.HostState.OFF -> "Ready · same Wi‑Fi" to Theme.SUCCESS
+        Links.HostState.FAILED -> ctx.getString(R.string.send_host_lan_only) to Theme.INK_2
+        Links.HostState.OFF -> ctx.getString(R.string.send_host_ready_lan) to Job.OK.text
     }
 
     /** The subtitle TextView of a Ui.row built with an icon (badge, then text column). */

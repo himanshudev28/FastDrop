@@ -157,4 +157,10 @@
     </plurals>
     <string name="pick_keep_files">Keep files</string>
     <string name="pick_clear">Clear</string>
+    <string name="send_host_setup_p2p">Setting up Wi‑Fi Direct…</string>
+    <string name="send_host_setup_hotspot">Setting up hotspot…</string>
+    <string name="send_host_ready_p2p">Ready · Wi‑Fi Direct</string>
+    <string name="send_host_ready_hotspot">Ready · Hotspot</string>
+    <string name="send_host_ready_lan">Ready · same Wi‑Fi</string>
+    <string name="send_host_lan_only">Same Wi‑Fi only</string>
 </resources>

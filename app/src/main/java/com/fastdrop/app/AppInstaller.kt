@@ -77,9 +77,9 @@ object AppInstaller {
         fun finish(ok: Boolean, msg: String) = Hub.main.post { done(ok, msg) }
 
         val apks = files.filter { isApk(it.name) && it.uri != null }
-        if (apks.isEmpty()) { finish(false, "No app file to install"); return }
+        if (apks.isEmpty()) { finish(false, Hub.app.getString(R.string.inst_no_file)); return }
         if (!canInstall(ctx)) {
-            finish(false, "Allow FastDrop to install apps first")
+            finish(false, Hub.app.getString(R.string.inst_allow_first))
             return
         }
         val label = apks.firstNotNullOfOrNull { it.app?.label }
@@ -135,16 +135,16 @@ object AppInstaller {
                 try { session?.abandon() } catch (_: Exception) { }
                 try { session?.close() } catch (_: Exception) { }
                 if (sessionId >= 0) try { installer.abandonSession(sessionId) } catch (_: Exception) { }
-                finish(false, "Couldn't install $label: ${friendlyError(e)}")
+                finish(false, Hub.app.getString(R.string.inst_failed_why, label, friendlyError(e)))
             }
         }
     }
 
     private fun friendlyError(e: Exception): String = when {
-        e is SecurityException -> "install isn't allowed"
-        e is java.io.FileNotFoundException -> "the file is missing"
-        e is java.io.IOException && (e.message ?: "").contains("ENOSPC") -> "not enough storage"
-        else -> e.message?.take(80) ?: "unknown error"
+        e is SecurityException -> Hub.app.getString(R.string.inst_err_not_allowed)
+        e is java.io.FileNotFoundException -> Hub.app.getString(R.string.inst_err_missing)
+        e is java.io.IOException && (e.message ?: "").contains("ENOSPC") -> Hub.app.getString(R.string.inst_err_storage)
+        else -> e.message?.take(80) ?: Hub.app.getString(R.string.inst_err_unknown)
     }
 
     // Works for content:// and file:// uris (ContentResolver handles both) with a plain-path fallback.
@@ -161,7 +161,7 @@ class InstallResultReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
         val sessionId = intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1)
-        val label = intent.getStringExtra(AppInstaller.EXTRA_LABEL) ?: "The app"
+        val label = intent.getStringExtra(AppInstaller.EXTRA_LABEL) ?: context.getString(R.string.inst_the_app)
         val detail = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
 
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
@@ -169,7 +169,7 @@ class InstallResultReceiver : BroadcastReceiver() {
                 intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
             else @Suppress("DEPRECATION") intent.getParcelableExtra(Intent.EXTRA_INTENT)
             if (confirm == null) {
-                report(context, sessionId, false, "Couldn't open the install screen for $label")
+                report(context, sessionId, false, context.getString(R.string.inst_cant_open_screen, label))
                 return
             }
             try {
@@ -177,22 +177,22 @@ class InstallResultReceiver : BroadcastReceiver() {
                 if (Build.VERSION.SDK_INT >= 29 && !visible) notifyConfirm(context, sessionId, confirm, label)
                 context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             } catch (_: Exception) {
-                report(context, sessionId, false, "Couldn't open the install screen for $label")
+                report(context, sessionId, false, context.getString(R.string.inst_cant_open_screen, label))
             }
             return
         }
 
         val ok = status == PackageInstaller.STATUS_SUCCESS
         val msg = when (status) {
-            PackageInstaller.STATUS_SUCCESS -> "$label installed"
-            PackageInstaller.STATUS_FAILURE_ABORTED -> "Install cancelled"
-            PackageInstaller.STATUS_FAILURE_BLOCKED -> "$label was blocked by your device or Play Protect"
+            PackageInstaller.STATUS_SUCCESS -> context.getString(R.string.inst_installed, label)
+            PackageInstaller.STATUS_FAILURE_ABORTED -> context.getString(R.string.inst_cancelled)
+            PackageInstaller.STATUS_FAILURE_BLOCKED -> context.getString(R.string.inst_blocked, label)
             PackageInstaller.STATUS_FAILURE_CONFLICT ->
-                "$label conflicts with the installed version. Uninstall that one first"
-            PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> "$label isn't compatible with this device"
-            PackageInstaller.STATUS_FAILURE_INVALID -> "$label is damaged or isn't a valid app"
-            PackageInstaller.STATUS_FAILURE_STORAGE -> "Not enough storage to install $label"
-            else -> "Couldn't install $label" + if (!detail.isNullOrBlank()) " ($detail)" else ""
+                context.getString(R.string.inst_conflict, label)
+            PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> context.getString(R.string.inst_incompatible, label)
+            PackageInstaller.STATUS_FAILURE_INVALID -> context.getString(R.string.inst_invalid, label)
+            PackageInstaller.STATUS_FAILURE_STORAGE -> context.getString(R.string.inst_no_space, label)
+            else -> if (!detail.isNullOrBlank()) context.getString(R.string.inst_failed_detail, label, detail) else context.getString(R.string.inst_failed, label)
         }
         report(context, sessionId, ok, msg)
     }
@@ -203,7 +203,7 @@ class InstallResultReceiver : BroadcastReceiver() {
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
             if (Build.VERSION.SDK_INT >= 26) {
                 nm.createNotificationChannel(
-                    android.app.NotificationChannel("fd_install", "App installs", android.app.NotificationManager.IMPORTANCE_HIGH)
+                    android.app.NotificationChannel("fd_install", context.getString(R.string.inst_channel), android.app.NotificationManager.IMPORTANCE_HIGH)
                 )
             }
             val pi = PendingIntent.getActivity(
@@ -213,8 +213,8 @@ class InstallResultReceiver : BroadcastReceiver() {
             val b = if (Build.VERSION.SDK_INT >= 26) android.app.Notification.Builder(context, "fd_install")
             else @Suppress("DEPRECATION") android.app.Notification.Builder(context)
             b.setSmallIcon(R.drawable.ic_stat)
-                .setContentTitle("Tap to install $label")
-                .setContentText("FastDrop needs your OK to finish installing")
+                .setContentTitle(context.getString(R.string.inst_tap_to_install, label))
+                .setContentText(context.getString(R.string.inst_needs_ok))
                 .setContentIntent(pi)
                 .setAutoCancel(true)
             nm.notify(0x1D00 + sessionId, b.build())

@@ -69,8 +69,8 @@ class TransferService : Service() {
                 channels(ctx)
                 val n = builder(ctx, CH_OFFER)
                     .setSmallIcon(R.drawable.ic_stat)
-                    .setContentTitle("$from wants to send you files")
-                    .setContentText("Tap to open FastDrop and accept")
+                    .setContentTitle(ctx.getString(R.string.notif_wants_files, from))
+                    .setContentText(ctx.getString(R.string.notif_tap_accept))
                     .setAutoCancel(true)
                     .setContentIntent(openApp(ctx))
                     .build()
@@ -85,8 +85,8 @@ class TransferService : Service() {
                 channels(ctx)
                 val n = builder(ctx, CH_OFFER)
                     .setSmallIcon(R.drawable.ic_stat)
-                    .setContentTitle(if (offer.text != null) "${offer.from} wants to send you text" else "${offer.from} wants to send you files")
-                    .setContentText(offer.text?.take(80) ?: "${offer.files.size} file(s) • ${Io.bytes(offer.total)}")
+                    .setContentTitle(ctx.getString(if (offer.text != null) R.string.notif_wants_text else R.string.notif_wants_files, offer.from))
+                    .setContentText(offer.text?.take(80) ?: ctx.getString(R.string.notif_n_files, offer.files.size, Io.bytes(offer.total)))
                     .setAutoCancel(true)
                     .setCategory(Notification.CATEGORY_MESSAGE)
                     .setContentIntent(openApp(ctx))
@@ -123,8 +123,8 @@ class TransferService : Service() {
         private fun channels(ctx: Context) {
             if (Build.VERSION.SDK_INT < 26) return
             val nm = ctx.getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            nm.createNotificationChannel(NotificationChannel(CH, "Transfers", NotificationManager.IMPORTANCE_LOW))
-            nm.createNotificationChannel(NotificationChannel(CH_OFFER, "Incoming files", NotificationManager.IMPORTANCE_HIGH))
+            nm.createNotificationChannel(NotificationChannel(CH, ctx.getString(R.string.notif_channel_transfers), NotificationManager.IMPORTANCE_LOW))
+            nm.createNotificationChannel(NotificationChannel(CH_OFFER, ctx.getString(R.string.notif_channel_incoming), NotificationManager.IMPORTANCE_HIGH))
         }
 
         @Suppress("DEPRECATION")
@@ -143,7 +143,7 @@ class TransferService : Service() {
         channels(this)
         // Started with startForegroundService(): if we cannot reach startForeground() Android kills the
         // process ("did not then call Service.startForeground()"), so every variant is tried first.
-        if (!goForeground(build("Ready to receive"))) stopSelf()
+        if (!goForeground(build(getString(R.string.notif_ready)))) stopSelf()
         // The multicast lock that discovery needs is held by Discovery itself (independent of this service).
     }
 
@@ -184,7 +184,7 @@ class TransferService : Service() {
     private fun build(text: String): Notification {
         val b = builder(this, CH)
             .setSmallIcon(R.drawable.ic_stat)
-            .setContentTitle("FastDrop")
+            .setContentTitle(getString(R.string.notif_app_name))
             .setContentText(text)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

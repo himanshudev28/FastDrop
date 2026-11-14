@@ -109,11 +109,11 @@ object Links {
     } catch (_: Exception) { false }
 
     fun linkLabel(via: String): String = when (via) {
-        Device.VIA_LAN -> "Same Wi‑Fi"
-        Device.VIA_P2P -> "Wi‑Fi Direct"
-        Device.VIA_QR -> "QR code"
-        JoinInfo.MODE_HOTSPOT -> "Hotspot"
-        else -> "Wi‑Fi"
+        Device.VIA_LAN -> Hub.app.getString(R.string.link_same_wifi)
+        Device.VIA_P2P -> Hub.app.getString(R.string.link_wifi_direct)
+        Device.VIA_QR -> Hub.app.getString(R.string.link_qr_code)
+        JoinInfo.MODE_HOTSPOT -> Hub.app.getString(R.string.link_hotspot)
+        else -> Hub.app.getString(R.string.link_wifi)
     }
 
     // ---------------------------------------------------------------- hosting
@@ -162,7 +162,7 @@ object Links {
             try {
                 if (joinedName != null) synchronized(joinLock) { releaseJoinNow(false) }
                 if (hostGen == g) runHost(app, g)
-            } catch (_: Throwable) { finishHost(g, null, "Couldn't start Wi‑Fi sharing", false) }
+            } catch (_: Throwable) { finishHost(g, null, app.getString(R.string.link_cant_start_sharing), false) }
         }
     }
 
@@ -172,21 +172,21 @@ object Links {
         var err: String? = null
         var retryable = false
         if (!hasPermissions(app)) {
-            err = "Allow Nearby devices to use Wi‑Fi Direct"
+            err = Hub.app.getString(R.string.link_allow_nearby)
             retryable = true
         } else {
             if (!p2pSupported(app)) {
-                err = "Wi‑Fi Direct not supported"
+                err = Hub.app.getString(R.string.link_p2p_unsupported)
             } else if (!wifiEnabled(app)) {
-                err = "Turn on Wi‑Fi to use Wi‑Fi Direct"
+                err = Hub.app.getString(R.string.link_turn_on_wifi_p2p)
                 retryable = true
             } else {
                 net = P2pLink.startHost(app, cancelled)
-                if (net == null) err = P2pLink.lastError ?: "Wi‑Fi Direct failed"
+                if (net == null) err = P2pLink.lastError ?: Hub.app.getString(R.string.link_p2p_failed)
             }
             if (net == null && !cancelled() && hotspotSupported(app)) {
                 net = HotspotLink.start(app, cancelled)
-                if (net == null) err = (err?.let { "$it; " } ?: "") + (HotspotLink.lastError ?: "Hotspot failed")
+                if (net == null) err = (err?.let { "$it; " } ?: "") + (HotspotLink.lastError ?: Hub.app.getString(R.string.link_hotspot_failed))
             }
         }
         if (cancelled()) return
@@ -199,7 +199,7 @@ object Links {
             hosted = net
             hostMode = net?.mode
             hostState = HostState.READY
-            hostError = if (net != null) null else (err ?: "No Wi‑Fi sharing available") + " – using same Wi‑Fi only"
+            hostError = if (net != null) null else Hub.app.getString(R.string.link_using_lan, err ?: Hub.app.getString(R.string.link_no_sharing))
             lanRetry = net == null && retryable
         }
         Hub.changed()
@@ -210,7 +210,7 @@ object Links {
         synchronized(lock) {
             if (hostState != HostState.READY || hostMode != mode) return
             hosted = null; hostMode = null; lanRetry = false
-            hostError = "$why – using same Wi‑Fi only"
+            hostError = Hub.app.getString(R.string.link_using_lan, why)
         }
         Hub.changed()
     }
@@ -307,7 +307,7 @@ object Links {
             Thread.interrupted()
             unbusy()
             cleanupAfterFailure()
-            throw IOException("Cancelled")
+            throw IOException(Hub.app.getString(R.string.msg_cancelled))
         } catch (e: IOException) {
             unbusy()
             cleanupAfterFailure()
@@ -315,7 +315,7 @@ object Links {
         } catch (e: Exception) {
             unbusy()
             cleanupAfterFailure()
-            throw IOException("Couldn't connect to ${dev.name}")
+            throw IOException(Hub.app.getString(R.string.msg_cant_connect_to, dev.name))
         } finally {
             unbusy()
         }
@@ -327,8 +327,8 @@ object Links {
 
     private fun failMessage(dev: Device): String {
         val why = joinWhy
-        return if (why.isNullOrEmpty()) "Couldn't connect to ${dev.name}. Keep both phones close, and open Receive on ${dev.name}."
-        else "Couldn't connect to ${dev.name}: $why"
+        return if (why.isNullOrEmpty()) Hub.app.getString(R.string.link_keep_close, dev.name)
+        else Hub.app.getString(R.string.link_cant_connect_why, dev.name, why)
     }
 
     private fun join(app: Context, dev: Device, info: JoinInfo?, st: (String) -> Unit): Device {
@@ -339,7 +339,7 @@ object Links {
             helloRetry(info.id, info.port, { candidates(info) }, 2500)?.let { return it }
         }
         releaseJoinNow()
-        if (!wifiEnabled(app)) throw IOException("Turn on Wi‑Fi to connect to ${dev.name}")
+        if (!wifiEnabled(app)) throw IOException(Hub.app.getString(R.string.link_turn_on_wifi_to, dev.name))
 
         var result: Device? = null
         if (info != null && info.hasNetwork) {
@@ -355,7 +355,7 @@ object Links {
         val ssid = info.ssid ?: return null
         if (Build.VERSION.SDK_INT >= 29) {
             if (hasPermissions(app) && p2pSupported(app)) {
-                st("Connecting via Wi‑Fi Direct…")
+                st(Hub.app.getString(R.string.link_connecting_p2p))
                 val go = connectCredentialsApi29(app, info)
                 if (go != null) {
                     setJoined(app, ssid)
@@ -363,7 +363,7 @@ object Links {
                     if (d != null) return d
                     P2pLink.leave()
                     setJoined(app, null)
-                    joinWhy = "Connected, but ${dev.name} didn't answer"
+                    joinWhy = Hub.app.getString(R.string.link_connected_no_answer, dev.name)
                 } else {
                     joinWhy = P2pLink.lastError
                 }
@@ -373,7 +373,7 @@ object Links {
         // Android 9 and older: the group is a normal WPA2 network for us.
         var d = joinWifi(app, dev, info, st)
         if (d == null && info.mac != null && hasPermissions(app) && p2pSupported(app)) {
-            st("Connecting via Wi‑Fi Direct…")
+            st(Hub.app.getString(R.string.link_connecting_p2p))
             val go = P2pLink.connectPbc(app, info.mac, 30_000)
             if (go != null) {
                 setJoined(app, ssid)
@@ -393,26 +393,26 @@ object Links {
         val ssid = info.ssid ?: return null
         val cancelled = { Thread.currentThread().isInterrupted }
         if (Build.VERSION.SDK_INT >= 29) {
-            st("Approve the Wi‑Fi prompt…")
+            st(Hub.app.getString(R.string.link_approve_prompt))
             val net = joinSpecApi29(app, info, cancelled)
             if (net == null) { joinWhy = WifiJoin.lastError ?: joinWhy; return null }
             setJoined(app, ssid)
-            st("Connecting to ${dev.name}…")
+            st(Hub.app.getString(R.string.msg_connecting_to, dev.name))
             val d = helloRetry(info.id, info.port, { candidates(info) }, 15_000)
             if (d == null) {
                 WifiJoin.release(); setJoined(app, null)
-                joinWhy = "Joined the Wi‑Fi, but ${dev.name} didn't answer"
+                joinWhy = Hub.app.getString(R.string.link_joined_no_answer, dev.name)
             }
             return d
         }
-        st("Joining $ssid…")
+        st(Hub.app.getString(R.string.link_joining, ssid))
         val gw = WifiJoin.joinLegacy(app, ssid, info.pass, 30_000, cancelled)
         if (gw == null) { joinWhy = WifiJoin.lastError ?: joinWhy; return null }
         setJoined(app, ssid)
         val d = helloRetry(info.id, info.port, { listOf(gw) + candidates(info) }, 12_000)
         if (d == null) {
             WifiJoin.release(); setJoined(app, null)
-            joinWhy = "Joined the Wi‑Fi, but ${dev.name} didn't answer"
+            joinWhy = Hub.app.getString(R.string.link_joined_no_answer, dev.name)
         }
         return d
     }
@@ -423,14 +423,14 @@ object Links {
 
     /** Nearby (DNS-SD) device without credentials: push-button connect, receiver sees the system invite. */
     private fun joinPbc(app: Context, dev: Device, st: (String) -> Unit): Device? {
-        st("Waiting for ${dev.name} to accept the Wi‑Fi Direct invite…")
+        st(Hub.app.getString(R.string.link_waiting_invite, dev.name))
         val go = P2pLink.connectPbc(app, dev.p2pAddress ?: return null, 40_000)
         if (go == null) { joinWhy = P2pLink.lastError; return null }
         setJoined(app, null, dev.name)
-        st("Connecting to ${dev.name}…")
+        st(Hub.app.getString(R.string.msg_connecting_to, dev.name))
         val port = if (dev.port > 0) dev.port else Proto.PORT
         val d = helloRetry(dev.id, port, { listOf(go) }, 15_000)
-        if (d == null) { P2pLink.leave(); setJoined(app, null); joinWhy = "Connected, but ${dev.name} didn't answer" }
+        if (d == null) { P2pLink.leave(); setJoined(app, null); joinWhy = Hub.app.getString(R.string.link_connected_no_answer, dev.name) }
         return d
     }
 
@@ -538,12 +538,12 @@ object Links {
                 val d = ensureReachable(app, deviceFromJoin(info)) { }
                 ok = true
                 try { Discovery.nudge() } catch (_: Exception) { }   // let the other side see us on this network
-                msg = "Connected to ${d.name}"
+                msg = Hub.app.getString(R.string.link_connected_to, d.name)
                 if (joinedName != null) scheduleRelease(5 * 60_000L)   // leave time for the other side to send
             } catch (e: IOException) {
-                msg = e.message ?: "Couldn't connect"
+                msg = e.message ?: Hub.app.getString(R.string.link_cant_connect)
             } catch (e: Exception) {
-                msg = "Couldn't connect"
+                msg = Hub.app.getString(R.string.link_cant_connect)
             }
             Hub.main.post { done(ok, msg) }
         }

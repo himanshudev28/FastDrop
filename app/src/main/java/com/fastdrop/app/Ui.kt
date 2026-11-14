@@ -827,9 +827,9 @@ object Ui {
         return LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(btn(R.drawable.ic_minus, "Decrease", -1), LinearLayout.LayoutParams(dp(ctx, 40), dp(ctx, 40)))
+            addView(btn(R.drawable.ic_minus, ctx.getString(R.string.ui_decrease), -1), LinearLayout.LayoutParams(dp(ctx, 40), dp(ctx, 40)))
             addView(num, LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = dp(ctx, 4); marginEnd = dp(ctx, 4) })
-            addView(btn(R.drawable.ic_plus, "Increase", 1), LinearLayout.LayoutParams(dp(ctx, 40), dp(ctx, 40)))
+            addView(btn(R.drawable.ic_plus, ctx.getString(R.string.ui_increase), 1), LinearLayout.LayoutParams(dp(ctx, 40), dp(ctx, 40)))
         }
     }
 

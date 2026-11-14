@@ -822,12 +822,12 @@ class TransferUi(private val host: MainActivity) {
         val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; setPadding(g, dp(16), g, 0) }
         var primary: View
         if (isUrl) {
-            row.addView(Ui.secondaryButton(ctx, str(R.string.action_copy)) { host.copyText("Text", text) },
+            row.addView(Ui.secondaryButton(ctx, str(R.string.action_copy)) { host.copyText(str(R.string.main_label_text), text) },
                 LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(12) })
             primary = Ui.jobButton(ctx, str(R.string.action_open_link), Job.TEXT, null) { host.openUrl(text); closeOffer() }
             row.addView(primary, LinearLayout.LayoutParams(0, -2, 1f))
         } else {
-            primary = Ui.jobButton(ctx, str(R.string.action_copy), Job.TEXT, null) { host.copyText("Text", text) }
+            primary = Ui.jobButton(ctx, str(R.string.action_copy), Job.TEXT, null) { host.copyText(str(R.string.main_label_text), text) }
             row.addView(primary, LinearLayout.LayoutParams(-1, -2))
         }
         body.addView(row, LinearLayout.LayoutParams(-1, -2))

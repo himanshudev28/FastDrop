@@ -428,8 +428,8 @@ class HomeScreen(host: MainActivity) : Screen(host) {
             when {
                 a == null -> ""
                 a.iface.name.lowercase().startsWith("wlan") -> wifiName()
-                a.iface.name.lowercase().startsWith("eth") -> "Ethernet"
-                a.iface.name.lowercase().startsWith("p2p") -> "Wi‑Fi Direct"
+                a.iface.name.lowercase().startsWith("eth") -> s(R.string.link_ethernet)
+                a.iface.name.lowercase().startsWith("p2p") -> s(R.string.link_wifi_direct)
                 else -> s(R.string.home_wifi_name_unknown)
             }
         } catch (_: Exception) { "" }
@@ -687,9 +687,9 @@ class HomeScreen(host: MainActivity) : Screen(host) {
             val url = ProtoV2.isHttpUrl(txt)
             val meta = if (e.outgoing) s(R.string.recent_to, if (url) "Link" else "Text", e.peer)
             else s(if (url) R.string.recent_link else R.string.recent_text, e.peer)
-            val trailing = Ui.secondaryButton(c, s(R.string.action_copy), null, true) { host.copyText("Text", txt) }
+            val trailing = Ui.secondaryButton(c, s(R.string.action_copy), null, true) { host.copyText(s(R.string.main_label_text), txt) }
             return Ui.row(c, null, HistoryStore.textPreview(txt), meta, trailing,
-                lead = Ui.plate(c, R.drawable.ic_link, p.fill, p.on, 40), onClick = { if (url) host.openUrl(txt) else host.copyText("Text", txt) })
+                lead = Ui.plate(c, R.drawable.ic_link, p.fill, p.on, 40), onClick = { if (url) host.openUrl(txt) else host.copyText(s(R.string.main_label_text), txt) })
         }
         // failed or cancelled
         if (failed) {

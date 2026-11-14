@@ -26,10 +26,12 @@ object Sender {
     /** Set when the user cancels; stops a multi-device send from moving on to the next device. */
     @Volatile var queueAborted = false
 
+    private fun str(id: Int, vararg a: Any): String = Hub.app.getString(id, *a)
+
     /** Sends [items], or [text] (a text / link offer with no files) when it is non-null. */
     fun send(ctx: Context, dev: Device, items: List<SendItem>, text: String? = null) {
         if (items.isEmpty() && text.isNullOrEmpty()) return
-        if (!Hub.tryReserve()) { Hub.message("A transfer is already running"); return }
+        if (!Hub.tryReserve()) { Hub.message(str(R.string.msg_transfer_running)); return }
         queueAborted = false
         thread(name = "sender") { run(ctx, dev, items, text) }
     }
@@ -38,7 +40,7 @@ object Sender {
     fun sendMany(ctx: Context, devs: List<Device>, items: List<SendItem>, text: String? = null) {
         if (devs.size == 1) { send(ctx, devs[0], items, text); return }
         if (devs.isEmpty() || (items.isEmpty() && text.isNullOrEmpty())) return
-        if (!Hub.tryReserve()) { Hub.message("A transfer is already running"); return }
+        if (!Hub.tryReserve()) { Hub.message(str(R.string.msg_transfer_running)); return }
         queueAborted = false
         thread(name = "sender-multi") {
             var ok = 0
@@ -53,14 +55,14 @@ object Sender {
                         while (!got && waited < 100) { Thread.sleep(100); waited++; got = Hub.tryReserve() }
                         if (!got) { busy++; continue }
                     }
-                    Hub.multiInfo = "Device ${i + 1} of ${devs.size}"
+                    Hub.multiInfo = str(R.string.msg_device_n_of, i + 1, devs.size)
                     if (run(ctx, d, items, text)) ok++
                 }
             } finally {
                 Hub.multiInfo = null
                 Hub.changed()
             }
-            Hub.message("Sent to $ok of ${devs.size} devices" + if (busy > 0) " ($busy skipped: busy)" else "")
+            Hub.message(if (busy > 0) str(R.string.msg_sent_to_n_of_busy, ok, devs.size, busy) else str(R.string.msg_sent_to_n_of, ok, devs.size))
         }
     }
 
@@ -82,7 +84,7 @@ object Sender {
     private fun run(ctx: Context, dev: Device, picked: List<SendItem>, text: String?): Boolean {
         val items = revalidate(ctx, picked)
         if (items.isEmpty() && text == null) {
-            Hub.message("Couldn't read the selected files")
+            Hub.message(str(R.string.msg_cant_read_selected))
             Hub.release(); Hub.changed()
             return false
         }
@@ -102,7 +104,7 @@ object Sender {
             if (dev.needsLink) {
                 linking = true
                 Hub.linking = true
-                Hub.pendingStatus = "Connecting to ${dev.name}…"
+                Hub.pendingStatus = str(R.string.msg_connecting_to, dev.name)
                 Hub.changed()
                 target = Links.ensureReachable(ctx, dev) { Hub.pendingStatus = it; Hub.changed() }
                 linking = false
@@ -113,11 +115,11 @@ object Sender {
 
             val id = UUID.randomUUID().toString()
             ctrl.tcpNoDelay = true
-            Hub.pendingStatus = "Connecting to ${dev.name}…"
+            Hub.pendingStatus = str(R.string.msg_connecting_to, dev.name)
             Hub.changed()
             Links.bindSocket(ctrl, target.ip)
             ctrl.connect(InetSocketAddress(target.ip, target.port), 5000)
-            Hub.pendingStatus = "Waiting for ${dev.name} to accept…"
+            Hub.pendingStatus = str(R.string.msg_waiting_accept, dev.name)
             Hub.changed()
             ctrl.soTimeout = 75_000                       // receiver has 60 s to tap Accept
             val out = DataOutputStream(BufferedOutputStream(ctrl.getOutputStream()))
@@ -151,13 +153,13 @@ object Sender {
             if (!resp.optBoolean("accept")) {
                 val reason = resp.optString("reason")
                 Hub.message(when {
-                    reason == "invalid" && text != null && !peerV2 -> "${dev.name} needs FastDrop 2.1 or newer to receive text"
-                    reason == "busy" -> "${dev.name} is busy with another transfer"
-                    reason == "closed" -> "FastDrop isn't open on ${dev.name}"
-                    reason == "timeout" -> "${dev.name} didn't respond"
-                    reason == "invalid" -> "${dev.name} rejected the file list"
-                    reason == "storage" -> "${dev.name} needs storage permission to receive"
-                    else -> "${dev.name} declined"
+                    reason == "invalid" && text != null && !peerV2 -> str(R.string.msg_needs_21_text, dev.name)
+                    reason == "busy" -> str(R.string.msg_peer_busy, dev.name)
+                    reason == "closed" -> str(R.string.msg_peer_closed, dev.name)
+                    reason == "timeout" -> str(R.string.msg_peer_timeout, dev.name)
+                    reason == "invalid" -> str(R.string.msg_peer_rejected, dev.name)
+                    reason == "storage" -> str(R.string.msg_peer_storage, dev.name)
+                    else -> str(R.string.msg_peer_declined, dev.name)
                 })
                 return false
             }
@@ -183,7 +185,7 @@ object Sender {
 
             val total = if (text != null) text.toByteArray(Charsets.UTF_8).size.toLong() else items.sumOf { it.size }
             val tr = Transfer(true, dev.name, total, items.size, Net.viaFor(ctrl.localAddress),
-                if (text != null) listOf("Text") else items.take(50).map { it.name }, text)
+                if (text != null) listOf(str(R.string.main_label_text)) else items.take(50).map { it.name }, text)
             tr.baseline = baseline
             tr.peerId = dev.id                                                       // history hook
             items.take(HistoryCodec.MAX_NAMES).forEach { tr.histFiles.add(HistoryStore.fileOf(it)) }
@@ -226,15 +228,15 @@ object Sender {
 
             ctrl.soTimeout = 60_000
             val fin = Io.readJson(inp)
-            if (fin.optBoolean("ok")) { success = true; Hub.end(tr, State.DONE, "Sent") }
-            else Hub.end(tr, State.FAILED, "Receiver reported an error")
+            if (fin.optBoolean("ok")) { success = true; Hub.end(tr, State.DONE, str(R.string.msg_sent)) }
+            else Hub.end(tr, State.FAILED, str(R.string.msg_receiver_error))
         } catch (e: Exception) {
             val msg = when {
-                t == null && ctrl.isClosed -> "Cancelled"
-                linking -> e.message ?: "Couldn't connect to ${dev.name}"
-                e is java.net.SocketTimeoutException -> "${dev.name} didn't answer"
-                e is java.net.ConnectException -> "Can't reach ${dev.name} (${target.ip})"
-                else -> "Transfer failed: ${e.message ?: e.javaClass.simpleName}"
+                t == null && ctrl.isClosed -> str(R.string.msg_cancelled)
+                linking -> e.message ?: str(R.string.msg_cant_connect_to, dev.name)
+                e is java.net.SocketTimeoutException -> str(R.string.msg_peer_no_answer, dev.name)
+                e is java.net.ConnectException -> str(R.string.msg_cant_reach, dev.name, target.ip)
+                else -> str(R.string.msg_transfer_failed, e.message ?: e.javaClass.simpleName)
             }
             if (t != null) Hub.end(t, State.FAILED, msg) else Hub.message(msg)
         } finally {

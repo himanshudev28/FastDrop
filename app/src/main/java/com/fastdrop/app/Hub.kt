@@ -366,7 +366,7 @@ object Hub {
         Sender.queueAborted = true
         Io.closeQuietly(pendingSocket)
         if (linking) try { pendingThread?.interrupt() } catch (_: Exception) { }
-        transfer?.let { if (it.running) end(it, State.CANCELLED, "Cancelled") }
+        transfer?.let { if (it.running) end(it, State.CANCELLED, app.getString(R.string.msg_cancelled)) }
     }
 
     fun addReceived(r: Received) {
@@ -388,16 +388,16 @@ object Hub {
     }
 
     fun statusLine(t: Transfer): String {
-        val dir = if (t.outgoing) "Sending to" else "Receiving from"
+        val dir = app.getString(if (t.outgoing) R.string.msg_sending_to else R.string.msg_receiving_from)
         return when (t.state) {
             State.RUNNING -> {
                 val pct = if (t.total > 0) t.done.get() * 100 / t.total else 100
                 val secs = (SystemClock.elapsedRealtime() - t.startedAt) / 1000.0
                 val sp = if (secs > 0) t.sessionDone / secs else 0.0
-                "$dir ${t.peer} • $pct% • ${Io.speed(sp)}"
+                app.getString(R.string.msg_status_running, dir, t.peer, pct, Io.speed(sp))
             }
-            State.DONE -> if (t.text != null || (t.files == 0 && t.total == 0L)) "Text ${if (t.outgoing) "sent to" else "from"} ${t.peer}"
-            else "Done: ${t.files} file(s), ${Io.bytes(t.total)} ${if (t.outgoing) "sent to" else "from"} ${t.peer}"
+            State.DONE -> if (t.text != null || (t.files == 0 && t.total == 0L)) app.getString(if (t.outgoing) R.string.msg_text_sent_to else R.string.msg_text_from, t.peer)
+            else app.getString(if (t.outgoing) R.string.msg_done_sent else R.string.msg_done_from, t.files, Io.bytes(t.total), t.peer)
             else -> t.message
         }
     }
@@ -440,7 +440,7 @@ object Hub {
                 val t = transfer ?: continue
                 if (!t.running) continue
                 if (!t.sentAll && SystemClock.elapsedRealtime() - t.lastProgressAt > 30_000) {
-                    end(t, State.FAILED, "Connection lost (no data for 30 s)")
+                    end(t, State.FAILED, app.getString(R.string.msg_no_data_30s))
                 } else {
                     TransferService.update(app, statusLine(t))
                     Integrations.onProgress()    // widget progress, throttled to 1 per 2 s

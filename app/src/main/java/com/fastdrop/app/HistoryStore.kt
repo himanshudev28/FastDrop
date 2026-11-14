@@ -120,7 +120,7 @@ object HistoryStore {
     }
 
     fun textPreview(text: String) =
-        text.trim().lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(60) ?: "Text"
+        text.trim().lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(60) ?: Hub.app.getString(R.string.main_label_text)
 
     fun all(): List<HistoryEntry> = synchronized(lock) { list }
 
@@ -188,7 +188,7 @@ object HistoryStore {
     /** Received text has no Transfer: record it directly. */
     fun recordIncomingText(from: String, fromId: String?, text: String) {
         add(HistoryEntry(UUID.randomUUID().toString(), false, from, fromId?.takeIf { it.isNotEmpty() }, emptyList(), 0,
-            text.toByteArray(Charsets.UTF_8).size.toLong(), 0.0, 0, System.currentTimeMillis(), HistoryCodec.DONE, "Received", text))
+            text.toByteArray(Charsets.UTF_8).size.toLong(), 0.0, 0, System.currentTimeMillis(), HistoryCodec.DONE, Hub.app.getString(R.string.msg_received), text))
     }
 
     /** Stored form of a [SendItem] (its uri, or a file: uri for cache files). */
