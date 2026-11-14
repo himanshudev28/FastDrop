@@ -156,12 +156,14 @@ class TransferUi(private val host: MainActivity) {
         private var boundTransfer: Any? = null
         private var outgoing = true
 
-        // speed smoothing (EMA over about 2 s, sampled every 250 ms)
+        // speed estimate (see smooth())
         private var speedFor: Transfer? = null
         private var lastDone = 0L
         private var lastTime = 0L
         private var ema = 0.0
         private var lastSpeed = 0.0
+        private var shownSpeed = 0.0
+        private var shownAt = 0L
         private var lastFrac = 0f
         private var lastAnnounce = 0L
 
@@ -173,8 +175,10 @@ class TransferUi(private val host: MainActivity) {
 
         private fun snapshot(peer: String?) {
             if (peer != null) Hub.devices.values.firstOrNull { it.name == peer }?.let { snapDev = it }
-            if (Hub.selection.isNotEmpty()) { snapItems = Hub.selection; snapText = null }
-            else Hub.selectionText?.let { snapText = it; snapItems = emptyList() }
+            // What this send started with, not the live selection (it may be edited or cleared meanwhile).
+            if (snapItems.isNotEmpty() || snapText != null) return
+            snapItems = Hub.sentItems
+            snapText = Hub.sentText
         }
 
         // result extras for the DONE state
@@ -245,9 +249,9 @@ class TransferUi(private val host: MainActivity) {
                     panel.setBang(false)
                     val who = pending ?: str(R.string.device_generic)
                     val code = Hub.pendingCode
-                    val sel = Hub.selection
+                    val sel = Hub.sentItems
                     val what = when {
-                        Hub.selectionText != null -> chars(Hub.selectionText?.length ?: 0)
+                        Hub.sentText != null -> chars(Hub.sentText?.length ?: 0)
                         sel.isEmpty() -> ""
                         else -> ctx.resources.getQuantityString(R.plurals.items_size, sel.size, sel.size, Io.bytes(sel.sumOf { it.size }))
                     }
@@ -390,26 +394,36 @@ class TransferUi(private val host: MainActivity) {
             } catch (_: Exception) { null }
         }
 
-        /** Exponential moving average over about 2 s, sampled every 250 ms; resets with each transfer. */
+        /**
+         * The speed on the readout is an estimate, not a live meter: a time-weighted average over about
+         * 5 s (the session average for the first 3 s, when a cold average swings), and the readout and
+         * ETA change at most every 2 s. Only reads the progress counter; nothing on the send path.
+         */
         private fun smooth(t: Transfer, done: Long): Double {
             val now = SystemClock.elapsedRealtime()
             if (t !== speedFor) {
-                speedFor = t; lastDone = done; lastTime = now; ema = 0.0
-            } else if (now - lastTime >= 250) {
-                val inst = (done - lastDone) * 1000.0 / (now - lastTime)
-                ema = if (ema == 0.0) inst else ema * 0.85 + inst * 0.15
+                speedFor = t; lastDone = done; lastTime = now; ema = 0.0; shownSpeed = 0.0; shownAt = 0L
+                return 0.0
+            }
+            val dt = now - lastTime
+            if (dt >= 250) {
+                val inst = (done - lastDone) * 1000.0 / dt
+                val run = now - t.startedAt
+                ema = if (run < 3000 || ema == 0.0) t.sessionDone * 1000.0 / run.coerceAtLeast(1)
+                else ema + (1 - Math.exp(-dt / 5000.0)) * (inst - ema)
                 lastDone = done; lastTime = now
             }
-            return ema
+            if (shownAt == 0L || now - shownAt >= 2000) { shownSpeed = ema; shownAt = now }
+            return shownSpeed
         }
 
         /** The file rows under the panel: names (sizes when known), first few only. */
         private fun bindNames(t: Transfer?) {
             listBox.removeAllViews()
-            val list = t?.names?.takeIf { it.isNotEmpty() } ?: Hub.selection.map { it.name }
+            val list = t?.names?.takeIf { it.isNotEmpty() } ?: Hub.sentItems.map { it.name }
             if (list.isEmpty()) return
             val sizes = HashMap<String, Long>()
-            for (s in Hub.selection) sizes[s.name] = s.size
+            for (s in Hub.sentItems) sizes[s.name] = s.size
             val shown = list.take(5)
             val g = Ui.gutter(ctx)
             shown.forEach { n ->
@@ -535,12 +549,14 @@ class TransferUi(private val host: MainActivity) {
                 Mode.FAIL -> {
                     val cancelled = t?.state == State.CANCELLED
                     val dev = if (t != null && t.outgoing && !cancelled)
-                        (Hub.devices.values.firstOrNull { it.name == t.peer } ?: snapDev) else null
+                        (t.peerId?.let { Hub.devices[it] } ?: Hub.devices.values.firstOrNull { it.name == t.peer } ?: snapDev
+                            ?: Hub.sentDevs.firstOrNull { it.id == t.peerId } ?: Hub.sentDevs.firstOrNull { it.name == t.peer }) else null
                     val close = Ui.secondaryButton(ctx, str(if (cancelled) R.string.action_done else R.string.action_close)) { finishWith(t) }
                     add(close, true)
                     focus = close
-                    val items = if (Hub.selection.isNotEmpty()) Hub.selection else snapItems
-                    val text = Hub.selectionText ?: t?.text ?: snapText
+                    // Retry resends what was sent, not whatever is selected now.
+                    val text = t?.text ?: snapText
+                    val items = if (text != null) emptyList() else snapItems.ifEmpty { Hub.sentItems }
                     if (dev != null && (items.isNotEmpty() || text != null)) {
                         val retry = Ui.jobButton(ctx, str(R.string.action_retry), Job.SEND, R.drawable.ic_refresh) {
                             finishWith(t)

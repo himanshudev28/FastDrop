@@ -187,6 +187,14 @@ object Hub {
         set(v) { field = v; if (v.isNotEmpty()) selectionText = null }     // files and text are exclusive
     /** Text / link / clipboard waiting to be sent instead of files (selection is empty while this is set). */
     @Volatile var selectionText: String? = null
+    /**
+     * What the latest send was started with (set by MainActivity.startSending). The transfer sheet's
+     * file list and Retry use it, because the selection may be edited or cleared while a send runs.
+     */
+    @Volatile var sentItems: List<SendItem> = emptyList()
+    @Volatile var sentText: String? = null
+    /** The devices the latest send went to (Retry still works after one drops off the nearby list). */
+    @Volatile var sentDevs: List<Device> = emptyList()
     /** Confirmation code ("0427") shown on the sender while waiting for Accept; null when not applicable. */
     @Volatile var pendingCode: String? = null
     /** Multi-device send progress, e.g. "Device 2 of 3"; null for single sends. */

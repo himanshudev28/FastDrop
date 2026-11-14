@@ -186,6 +186,7 @@ class SendScreen(host: MainActivity) : Screen(host) {
     private companion object {
         const val K_KEY = 0x7f0fff31
         const val K_SIG = 0x7f0fff32
+        const val SEL_COLLAPSED = 4
     }
 
     private class Entry(val key: String, val sig: String, val build: () -> View)
@@ -219,6 +220,15 @@ class SendScreen(host: MainActivity) : Screen(host) {
     private var ordered: List<Device> = emptyList()
     private var lastSelRef: List<SendItem>? = null
     private var lastSelText: String? = null
+    /** The selection list shows every line instead of the first [SEL_COLLAPSED]. */
+    private var listExpanded = false
+    /** D-pad: after a remove, focus goes to the remove button now at this index (-1: leave focus alone). */
+    private var refocusSel = -1
+    /** D-pad: "Show all" / "Show less" was pressed; focus its replacement after the rebuild. */
+    private var refocusMore = false
+
+    /** One removable line of the selection: an app (all its APKs), a folder, or a single file. */
+    private class SelRow(val key: String, val title: String, val glyph: Int, val kind: String, val items: List<SendItem>)
     private var lastHeader = ""
     private var lastQr: String? = null
 
@@ -314,7 +324,7 @@ class SendScreen(host: MainActivity) : Screen(host) {
             Hub.devices.isNotEmpty() -> Ui.quietButton(ctx, s(R.string.send_select)) { enterMulti() }
             else -> null
         }
-        val back = { if (multiMode) exitMulti() else host.pop() }
+        val back = { if (multiMode) exitMulti() else leave() }
         val hv = Ui.header(ctx, title, back, trailing)
         headerBox.addView(hv, lp())
         if (had != null) {
@@ -385,7 +395,34 @@ class SendScreen(host: MainActivity) : Screen(host) {
 
     private fun edit() {
         if (Hub.selectionText != null) typeText(Hub.selectionText.orEmpty())
-        else host.openPicker(PickerActivity.TAB_PHOTOS) { refresh() }
+        else host.openPicker(PickerActivity.TAB_PHOTOS, keep = true) { refresh() }
+    }
+
+    /** Leaving "Send to" without sending drops the selection, so the next pick starts empty. */
+    private fun clearSelection() {
+        Hub.selection = emptyList()
+        Hub.selectionText = null
+    }
+
+    private fun leave() {
+        clearSelection()
+        host.pop()
+    }
+
+    /** Removes one line of the selection (a file, a folder, or an app with all its APKs). */
+    private fun removeRow(r: SelRow, index: Int) {
+        val drop = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<SendItem, Boolean>())
+        drop.addAll(r.items)
+        Hub.selection = Hub.selection.filter { it !in drop }
+        refocusSel = index
+        refresh()
+    }
+
+    private fun clearAll() {
+        clearSelection()
+        listExpanded = false
+        refocusSel = 0          // focus lands on Choose (see refreshSelection)
+        refresh()
     }
 
     private fun typeText(initial: String = "") {
@@ -515,6 +552,7 @@ class SendScreen(host: MainActivity) : Screen(host) {
         if (sheet?.showing == true) { sheet?.dismiss(); sheet = null; return true }
         if (multiMode) { exitMulti(); return true }
         if (qrOpen) { toggleQr(); return true }
+        clearSelection()          // MainActivity pops us next
         return false
     }
 
@@ -564,6 +602,9 @@ class SendScreen(host: MainActivity) : Screen(host) {
         lastSelRef = sel; lastSelText = txt
         summaryBox.removeAllViews()
         val g = Ui.gutter(ctx)
+        val refocus = refocusSel
+        refocusSel = -1
+        val dpad = Ui.tv(ctx) || !summaryBox.isInTouchMode
 
         fun head(title: String, action: String) {
             val row = LinearLayout(ctx).apply {
@@ -586,12 +627,15 @@ class SendScreen(host: MainActivity) : Screen(host) {
                 setPadding(dp(16), dp(12), dp(12), dp(12))
             }, FrameLayout.LayoutParams(-1, -2))
             well.addView(View(ctx).apply { setBackgroundColor(Theme.C_TEXT) }, FrameLayout.LayoutParams(dp(4), -1))
-            summaryBox.addView(well, LinearLayout.LayoutParams(-1, -2).apply { setMargins(g, dp(12), g, dp(12)) })
+            summaryBox.addView(well, LinearLayout.LayoutParams(-1, -2).apply { setMargins(g, dp(12), g, 0) })
+            summaryBox.addView(selFooter(0), lp())
             return
         }
         if (sel.isEmpty()) {
             head(s(R.string.send_nothing), s(R.string.send_choose))
             summaryBox.addView(Ui.text(ctx, s(R.string.send_nothing_meta), Type.META).apply { setPadding(g, dp(4), g, dp(12)) }, lp())
+            // Removed the last line or cleared: D-pad focus moves to Choose.
+            if (refocus >= 0 && dpad) ScreenKit.firstFocusable(summaryBox)?.let { v -> v.post { v.requestFocus() } }
             return
         }
         val apps = HashSet<String>()
@@ -633,6 +677,107 @@ class SendScreen(host: MainActivity) : Screen(host) {
             addView(chips)
         }
         summaryBox.addView(scrollChips, lp())
+
+        // Every selected file (folders and apps as one line each), each with a remove button.
+        val rows = selRows(sel)
+        if (rows.size <= SEL_COLLAPSED) listExpanded = false
+        val visible = if (listExpanded) rows else rows.take(SEL_COLLAPSED)
+        val removeBtns = ArrayList<View>()
+        visible.forEachIndexed { i, r ->
+            val (v, x) = selRowView(r, i)
+            summaryBox.addView(v, lp())
+            removeBtns.add(x)
+        }
+        summaryBox.addView(selFooter(rows.size), lp())
+
+        if (refocus >= 0 && dpad) {
+            val target = removeBtns.getOrNull(refocus.coerceAtMost(removeBtns.size - 1))
+            target?.post { target.requestFocus() }
+        }
+    }
+
+    /** Groups the flat item list into removable lines, in selection order. */
+    private fun selRows(sel: List<SendItem>): List<SelRow> {
+        class G(val title: String, val glyph: Int, val kind: String) { val items = ArrayList<SendItem>() }
+        val groups = LinkedHashMap<String, G>()
+        sel.forEachIndexed { i, item ->
+            val a = item.app
+            val key: String
+            val make: () -> G
+            when {
+                a != null -> { key = "a:${a.pkg}"; make = { G(a.label, R.drawable.ic_apps, "apps") } }
+                '/' in item.name -> {
+                    val top = item.name.substringBefore('/')
+                    key = "d:$top"; make = { G(top, R.drawable.ic_folder, "files") }
+                }
+                else -> {
+                    val glyph = Thumbs.iconFor(item.name)
+                    key = "f:$i"; make = { G(item.name, glyph, kindOf(glyph)) }
+                }
+            }
+            groups.getOrPut(key, make).items.add(item)
+        }
+        return groups.map { (k, g) -> SelRow(k, g.title, g.glyph, g.kind, g.items) }
+    }
+
+    private fun kindOf(glyph: Int) = when (glyph) {
+        R.drawable.ic_photo -> "photos"
+        R.drawable.ic_video -> "videos"
+        R.drawable.ic_music -> "music"
+        R.drawable.ic_apps -> "apps"
+        else -> "files"
+    }
+
+    /** Plate, name, size, and a remove (x) button. Returns the row and its remove button. */
+    private fun selRowView(r: SelRow, index: Int): Pair<View, View> {
+        val g = Ui.gutter(ctx)
+        val row = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(52)
+            setPadding(g, dp(2), dp(4), dp(2))
+        }
+        val p = Theme.plateFor(r.kind)
+        row.addView(Ui.plate(ctx, r.glyph, p.fill, p.on, 32), LinearLayout.LayoutParams(dp(32), dp(32)).apply { marginEnd = dp(12) })
+        val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(Ui.text(ctx, r.title, Type.ROW, Theme.INK).apply {
+            maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+        }, lp())
+        val size = Io.bytes(r.items.sumOf { it.size })
+        val sub = if (r.key.startsWith("d:")) ctx.resources.getQuantityString(R.plurals.items_size, r.items.size, r.items.size, size) else size
+        col.addView(Ui.mono(ctx, sub), lp())
+        row.addView(col, LinearLayout.LayoutParams(0, ScreenKit.WRAP, 1f))
+        val x = Ui.iconButton(ctx, R.drawable.ic_close, s(R.string.send_remove, r.title)) { removeRow(r, index) }
+        row.addView(x)
+        return row to x
+    }
+
+    /** "Show all 12" / "Show less" when the list is long, and "Clear all" to drop the whole selection. */
+    private fun selFooter(rowCount: Int): View {
+        val g = Ui.gutter(ctx)
+        val bar = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(g - dp(12), dp(4), g - dp(12), dp(8))
+        }
+        if (rowCount > SEL_COLLAPSED) {
+            val more = Ui.quietButton(ctx, if (listExpanded) s(R.string.send_show_less) else s(R.string.send_show_all, rowCount)) {
+                listExpanded = !listExpanded
+                refocusMore = true
+                lastSelRef = null
+                refreshSelection()
+            }
+            bar.addView(more, LinearLayout.LayoutParams(ScreenKit.WRAP, ScreenKit.WRAP))
+            // D-pad: the rebuild replaced the button that had focus; put focus on its replacement.
+            if (refocusMore) {
+                refocusMore = false
+                if (Ui.tv(ctx) || !summaryBox.isInTouchMode) more.post { more.requestFocus() }
+            }
+        }
+        bar.addView(View(ctx), LinearLayout.LayoutParams(0, 1, 1f))
+        bar.addView(Ui.quietButton(ctx, s(R.string.send_clear_all), danger = true) { clearAll() },
+            LinearLayout.LayoutParams(ScreenKit.WRAP, ScreenKit.WRAP))
+        return bar
     }
 
     private fun refreshQr() {

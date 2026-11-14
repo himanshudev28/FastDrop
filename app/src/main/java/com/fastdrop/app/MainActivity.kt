@@ -360,10 +360,12 @@ class MainActivity : Activity(), Hub.Listener {
     fun showWebShare(includeApp: Boolean) = push(WebShareScreen(this, includeApp))
 
     @Suppress("DEPRECATION")
-    fun openPicker(tab: String = PickerActivity.TAB_PHOTOS, then: (() -> Unit)? = null) {
+    fun openPicker(tab: String = PickerActivity.TAB_PHOTOS, keep: Boolean = false, then: (() -> Unit)? = null) {
         pickThen = then
+        // A fresh pick replaces the selection, and cancelling it leaves nothing old behind.
+        if (!keep) { Hub.selection = emptyList(); Hub.selectionText = null }
         try {
-            startActivityForResult(PickerActivity.intent(this, tab), REQ_PICK)
+            startActivityForResult(PickerActivity.intent(this, tab, keep), REQ_PICK)
         } catch (_: Exception) {
             pickThen = null
             toast("Can't open the picker", 2)
@@ -372,7 +374,7 @@ class MainActivity : Activity(), Hub.Listener {
 
     /** Home "Send": nothing picked yet means pick first, otherwise straight to device choice. */
     fun startSend() {
-        if (!hasPayload()) openPicker(PickerActivity.TAB_PHOTOS, null)
+        if (!hasPayload()) openPicker(PickerActivity.TAB_PHOTOS)
         else if (current !is SendScreen) push(SendScreen(this))
     }
 
@@ -425,6 +427,12 @@ class MainActivity : Activity(), Hub.Listener {
         val text = Hub.selectionText?.takeIf { it.isNotEmpty() }
         val sel = if (text != null) emptyList() else Hub.selection
         if (sel.isEmpty() && text == null) return
+        Hub.sentItems = sel
+        Hub.sentText = text
+        Hub.sentDevs = devs
+        // Sent from outside "Send to" (Direct Share, Retry, Send back): nothing on screen holds this
+        // selection, so drop it now or Home "Send" would offer the same files again later.
+        if (current !is SendScreen) { Hub.selection = emptyList(); Hub.selectionText = null }
         Sender.sendMany(applicationContext, devs, sel, text)
     }
 

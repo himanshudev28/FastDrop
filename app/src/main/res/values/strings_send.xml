@@ -14,6 +14,10 @@
     <string name="send_choose">Choose</string>
     <string name="send_nothing">Nothing selected</string>
     <string name="send_nothing_meta">Choose what to send first.</string>
+    <string name="send_remove">Remove %1$s</string>
+    <string name="send_clear_all">Clear all</string>
+    <string name="send_show_all">Show all %1$d</string>
+    <string name="send_show_less">Show less</string>
     <plurals name="send_text_chars">
         <item quantity="one">Text · %1$d character</item>
         <item quantity="other">Text · %1$d characters</item>

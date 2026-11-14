@@ -39,6 +39,8 @@ class PickerActivity : Activity() {
         const val TAB_FILES = "files"
         const val TAB_TEXT = "text"
         const val EXTRA_TAB = "tab"
+        /** Start from the current selection (Edit on the send screen). Otherwise the picker starts empty. */
+        const val EXTRA_KEEP = "keep"
 
         private const val REQ_FILES = 1
         private const val REQ_FOLDER = 2
@@ -47,8 +49,8 @@ class PickerActivity : Activity() {
         private const val REQ_MEDIA = 20       // + MediaKind ordinal
         private const val MAX_PERSISTED = 100
 
-        fun intent(ctx: Context, tab: String): Intent =
-            Intent(ctx, PickerActivity::class.java).putExtra(EXTRA_TAB, tab)
+        fun intent(ctx: Context, tab: String, keep: Boolean = false): Intent =
+            Intent(ctx, PickerActivity::class.java).putExtra(EXTRA_TAB, tab).putExtra(EXTRA_KEEP, keep)
     }
 
     // ---------- model ----------
@@ -116,8 +118,12 @@ class PickerActivity : Activity() {
         Theme.resolve(this)
         PickUi.edgeToEdge(this)
         PickUi.registerBack(this) { cancel() }
-        loadExisting()
-        typed = Hub.selectionText.orEmpty()
+        // A fresh pick (Home tiles, Send more, ...) never brings back an old, unsent selection.
+        val keep = intent?.getBooleanExtra(EXTRA_KEEP, false) == true
+        if (keep) {
+            loadExisting()
+            typed = Hub.selectionText.orEmpty()
+        }
         paneViews = arrayOfNulls(defs.size)
         setContentView(buildUi())
         Theme.applyWindow(this)

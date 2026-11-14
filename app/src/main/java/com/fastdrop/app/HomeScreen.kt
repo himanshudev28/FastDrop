@@ -14,9 +14,11 @@ import android.text.TextUtils
 import android.text.format.DateUtils
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.TextView
 import android.widget.LinearLayout
 
 /**
@@ -523,6 +525,9 @@ class HomeScreen(host: MainActivity) : Screen(host) {
             }
         }
         line.addView(Ui.led(c, led), LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginEnd = dp(10) })
+        // The line fills INK when focused / selected: its text must flip to BG with it, or the name
+        // and IP vanish (black on black, white on white in dark mode).
+        followFill(label)
         line.addView(label, LinearLayout.LayoutParams(-2, -2))
         line.contentDescription = "${Hub.myName}. ${net} $ip"
         heroBox.addView(line, lp())
@@ -534,6 +539,20 @@ class HomeScreen(host: MainActivity) : Screen(host) {
             }
             heroBox.addView(Ui.text(c, s(summary), Type.META).apply { setPadding(g + dp(18), 0, g, dp(12)) }, lp())
         } else heroBox.addView(Ui.spacer(c, 12))
+    }
+
+    /** Text under [v] takes BG while their row is focused or selected (its fill is INK). */
+    private fun followFill(v: View) {
+        v.isDuplicateParentStateEnabled = true
+        when (v) {
+            is TextView -> v.setTextColor(Ui.states(v.currentTextColor, Theme.BG, Ui.tv(ctx)))
+            is ViewGroup -> {
+                // A group only forwards its state to children that were flagged when added: re-add them.
+                val kids = (0 until v.childCount).map { v.getChildAt(it) }
+                v.removeAllViews()
+                for (k in kids) { followFill(k); v.addView(k, k.layoutParams) }
+            }
+        }
     }
 
     // ---------------------------------------------------------------- nearby ports
