@@ -148,6 +148,8 @@ class TransferUi(private val host: MainActivity) {
         /** Pause state and control support the action row was built for. */
         private var actionsPaused = false
         private var actionsCtl = false
+        /** Pause / Resume was just pressed: the rebuilt row puts focus back on it, not on Cancel. */
+        private var pauseHadFocus = false
         private var tickFor: Transfer? = null
         private val extras = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -581,8 +583,10 @@ class TransferUi(private val host: MainActivity) {
                     focus = cancel
                     if (m == Mode.RUN && t != null && t.canControl) {
                         val p = t.paused
-                        add(Ui.jobButton(ctx, str(if (p) R.string.action_resume else R.string.action_pause),
-                            if (t.outgoing) Job.SEND else Job.RECEIVE, null) { t.userPause(!p) }, false)
+                        val pb = Ui.jobButton(ctx, str(if (p) R.string.action_resume else R.string.action_pause),
+                            if (t.outgoing) Job.SEND else Job.RECEIVE, null) { pauseHadFocus = true; t.userPause(!p) }
+                        add(pb, false)
+                        if (pauseHadFocus) { pauseHadFocus = false; focus = pb }
                     }
                     if (Sender.queued > 0) add(Ui.quietButton(ctx, str(R.string.action_clear_queue), danger = true) { Sender.clearQueue() }, false)
                 }

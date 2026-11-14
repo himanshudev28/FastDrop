@@ -169,17 +169,19 @@ object HistoryStore {
             State.CANCELLED -> HistoryCodec.CANCELLED
             else -> HistoryCodec.FAILED
         }
-        val files = ArrayList<HFile>(t.histFiles)
+        val skipped = t.skippedFiles.toSet()
+        // Outgoing histFiles are in file order, so a position is a file index. Skipped files were not delivered.
+        val files = if (t.outgoing) ArrayList(t.histFiles.filterIndexed { i, _ -> i !in skipped }) else ArrayList<HFile>(t.histFiles)
         if (!t.outgoing) {
-            // Files that didn't finish are listed by name only (no uri).
+            // Files that didn't finish are listed by name only (no uri); skipped ones not at all.
             val have = files.map { it.name }.toHashSet()
-            for (n in t.names) if (files.size < HistoryCodec.MAX_NAMES && have.add(n)) files.add(HFile(n, 0))
+            t.names.forEachIndexed { i, n -> if (i !in skipped && files.size < HistoryCodec.MAX_NAMES && have.add(n)) files.add(HFile(n, 0)) }
         }
         val dur = ((if (t.finishedAt > 0) t.finishedAt else SystemClock.elapsedRealtime()) - t.startedAt).coerceAtLeast(0)
         val speed = if (dur > 0) t.sessionDone * 1000.0 / dur else 0.0
         add(HistoryEntry(
             id = UUID.randomUUID().toString(), outgoing = t.outgoing, peer = t.peer, peerId = t.peerId,
-            files = files.take(HistoryCodec.MAX_NAMES), count = t.files, total = t.total,
+            files = files.take(HistoryCodec.MAX_NAMES), count = t.files - skipped.size, total = t.total,
             avgSpeed = speed, durationMs = dur, at = System.currentTimeMillis(),
             state = state, message = t.message, text = t.text,
         ))

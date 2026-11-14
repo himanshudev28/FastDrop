@@ -465,7 +465,7 @@ object Hub {
                 else app.getString(R.string.msg_status_running, dir, t.peer, pct, Io.speed(sp))
             }
             State.DONE -> if (t.text != null || (t.files == 0 && t.total == 0L)) app.getString(if (t.outgoing) R.string.msg_text_sent_to else R.string.msg_text_from, t.peer)
-            else app.getString(if (t.outgoing) R.string.msg_done_sent else R.string.msg_done_from, t.files, Io.bytes(t.total), t.peer)
+            else app.getString(if (t.outgoing) R.string.msg_done_sent else R.string.msg_done_from, t.files - t.skippedFiles.size, Io.bytes(t.total), t.peer)
             else -> t.message
         }
     }

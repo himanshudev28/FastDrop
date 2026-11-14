@@ -65,9 +65,10 @@ object Server {
     }
 
     /** Returns false if the sender is already gone. [extra] fields (protocol 2) are merged into the reply. */
-    /** CTRL writes from the UI (control messages) and from the session (final message) never interleave. */
+    /** CTRL writes (control messages and the final message) never interleave; callers are never the UI thread. */
+    private val ctlLock = Any()
     private fun sendCtl(ch: SocketChannel, m: JSONObject) {
-        try { synchronized(ch) { Io.writeJson(ch, m) } } catch (_: Exception) { }
+        try { synchronized(ctlLock) { Io.writeJson(ch, m) } } catch (_: Exception) { }
     }
 
     private fun reply(ch: SocketChannel, accept: Boolean, reason: String, v2: Boolean = false, extra: JSONObject? = null): Boolean {
@@ -200,7 +201,10 @@ object Server {
             if (ctl) {
                 extra.put("ctl", true)
                 t.applySkipLocal = { i -> s.skip(i) }
-                t.control = { m -> sendCtl(ch, m) }
+                // Pause / Skip come from button taps on the main thread: write from a worker thread.
+                val writer = Executors.newSingleThreadExecutor { r -> Thread(r, "ctl-write").apply { isDaemon = true } }
+                t.control = { m -> try { writer.execute { sendCtl(ch, m) } } catch (_: Exception) { } }
+                t.register(java.io.Closeable { writer.shutdownNow() })
             }
             Hub.begin(t)
             reserved = false             // the transfer owns the busy flag now; Hub.end releases it

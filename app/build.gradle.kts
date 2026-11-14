@@ -21,8 +21,8 @@ android {
         targetSdk = 35
         manifestPlaceholders["localNetworkPermission"] =
             if (targetSdk!! >= 37) "android.permission.ACCESS_LOCAL_NETWORK" else "android.permission.INTERNET"
-        versionCode = 5
-        versionName = "2.2"
+        versionCode = 6
+        versionName = "2.3"
     }
 
     // CI (GitHub Actions) passes a keystore through these env vars. Locally they're unset,

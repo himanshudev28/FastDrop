@@ -252,7 +252,7 @@ object Sender {
                 if (todo == 0L) tr.finishedFiles.add(i)          // empty, or already on the receiver (resume)
             }
             tr.fileLeft = left
-            val fin = if (useCtl) startControl(tr, ctrl, inp, out, items) else null
+            val fin = if (useCtl) startControl(tr, ctrl, inp, out, items, queue) else null
             val n = minOf(Hub.streams.coerceIn(1, 8), queue.size)
             val error = AtomicReference<Exception?>()
             val workers = (0 until n).map {
@@ -260,14 +260,20 @@ object Sender {
                     try {
                         worker(ctx, target, id, items, queue, tr, useCrc)
                     } catch (e: Exception) {
-                        if (error.compareAndSet(null, e)) tr.closeAll()  // stop the other streams too
+                        // Stop the other streams too, unless the receiver already said ok (it may close
+                        // DATA early after a skip; that is not a failure).
+                        if (error.compareAndSet(null, e) && fin?.msg == null) tr.closeAll()
                     }
                 }
             }
             workers.forEach { it.join() }
             tr.sentAll = true                             // all bytes written; receiver may still be finalizing
             if (!tr.running) return false                 // cancelled / stalled; already reported
-            error.get()?.let { throw it }
+            error.get()?.let { err ->
+                // A stream failed: fine only if the receiver has already answered ok (ctl: early close after a skip).
+                val okAlready = fin != null && fin.latch.await(3, java.util.concurrent.TimeUnit.SECONDS) && fin.msg?.optBoolean("ok") == true
+                if (!okAlready) throw err
+            }
 
             val done = if (fin != null) {
                 // The control reader receives the final message; give the receiver 60 s to finish up.
@@ -313,7 +319,10 @@ object Sender {
      * {"ok"} message; writes go through one thread so they never interleave. No read timeout: stalls are
      * the data watchdog's job (and it ignores paused time).
      */
-    private fun startControl(tr: Transfer, ctrl: Socket, inp: DataInputStream, out: DataOutputStream, items: List<SendItem>): Fin {
+    private fun startControl(
+        tr: Transfer, ctrl: Socket, inp: DataInputStream, out: DataOutputStream, items: List<SendItem>,
+        queue: ConcurrentLinkedQueue<Chunk>,
+    ): Fin {
         val fin = Fin()
         val writer = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "ctl-write").apply { isDaemon = true } }
         tr.control = { m -> try { writer.execute { try { Io.writeJson(out, m) } catch (_: Exception) { } } } catch (_: Exception) { } }
@@ -321,9 +330,10 @@ object Sender {
         tr.applySkipLocal = { i ->
             if (i !in items.indices || i in tr.finishedFiles || !tr.skippedFiles.add(i)) false
             else {
-                // Bytes of this file not written yet no longer count (an in-flight chunk still finishes).
-                val left = tr.fileLeft?.get(i) ?: 0L
-                tr.total = (tr.total - left.coerceAtLeast(0L)).coerceAtLeast(tr.done.get())
+                // Only chunks still queued drop out: a chunk already being written still arrives and counts.
+                var queued = 0L
+                for (c in queue) if (c.file == i) queued += c.len
+                tr.total = (tr.total - queued).coerceAtLeast(tr.done.get())
                 true
             }
         }
